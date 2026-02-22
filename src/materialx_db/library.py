@@ -6,8 +6,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from materialx_lib.db import DB_PATH, get_connection, create_tables, drop_tables
-from materialx_lib.convert import convert_material
+from materialx_db.db import DB_PATH, get_connection, create_tables, drop_tables
+from materialx_db.convert import convert_material
 
 log = logging.getLogger(__name__)
 
@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class MaterialInfo:
     """Summary of a material in the catalog."""
+
     id: str
     source: str
     name: str
@@ -51,6 +52,11 @@ class MaterialLibrary:
     def __init__(self, db_path: Path | str | None = None):
         self._db_path = Path(db_path) if db_path else DB_PATH
         self._conn = get_connection(self._db_path)
+        print("Sources")
+        print("- https://physicallybased.info/")
+        print("- https://matlib.gpuopen.com/main/materials/all")
+        print("- https://ambientcg.com/list?type=material")
+        print("- https://polyhaven.com/textures")
 
     def close(self):
         self._conn.close()
@@ -229,7 +235,7 @@ class MaterialLibrary:
         self, material_id: str, variants: list[sqlite3.Row]
     ) -> dict[str, sqlite3.Row]:
         """Fetch package labels from GPUOpen API and update DB. Returns {label: row}."""
-        from materialx_lib.sources.gpuopen import fetch_package_labels
+        from materialx_db.sources.gpuopen import fetch_package_labels
 
         pkg_uuids = []
         for v in variants:
@@ -265,7 +271,7 @@ class MaterialLibrary:
 
         Returns dict of source_name -> material_count.
         """
-        from materialx_lib.sources import ambientcg, gpuopen, polyhaven, physicallybased
+        from materialx_db.sources import ambientcg, gpuopen, polyhaven, physicallybased
 
         all_sources = {
             "ambientcg": ambientcg,

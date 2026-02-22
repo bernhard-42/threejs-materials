@@ -7,8 +7,8 @@ import sqlite3
 import MaterialX as mx
 from materialxMaterials.ambientCGLoader import AmbientCGLoader
 
-from materialx_lib.categories import categorize_by_name
-from materialx_lib.db import insert_material, insert_variant
+from materialx_db.categories import categorize_by_name
+from materialx_db.db import insert_material, insert_variant
 
 log = logging.getLogger(__name__)
 

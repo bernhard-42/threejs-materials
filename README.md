@@ -1,4 +1,4 @@
-# materialx-lib
+# materialx-db
 
 A Python library that catalogs 3,200+ PBR materials from four open sources into a local SQLite database and converts them on demand into [Three.js `MeshPhysicalMaterial`](https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial)-compatible JSON with base64-encoded textures.
 
@@ -6,12 +6,12 @@ A Python library that catalogs 3,200+ PBR materials from four open sources into 
 
 Provide a single, unified API to **browse, search, and retrieve** production-ready PBR materials from:
 
-| Source | Materials | Type | Shader model |
-|---|---|---|---|
-| [ambientCG](https://ambientcg.com/) | ~1,960 | Texture-based | `open_pbr_surface` |
-| [GPUOpen MaterialX Library](https://matlib.gpuopen.com/) | ~454 | Procedural (baked) | `standard_surface` |
-| [PolyHaven](https://polyhaven.com/) | ~742 | Texture-based | `standard_surface` |
-| [PhysicallyBased](https://physicallybased.info/) | ~86 | Parametric (no textures) | `open_pbr_surface` |
+| Source                                                   | Materials | Type                     | Shader model       |
+| -------------------------------------------------------- | --------- | ------------------------ | ------------------ |
+| [ambientCG](https://ambientcg.com/)                      | ~1,960    | Texture-based            | `open_pbr_surface` |
+| [GPUOpen MaterialX Library](https://matlib.gpuopen.com/) | ~454      | Procedural (baked)       | `standard_surface` |
+| [PolyHaven](https://polyhaven.com/)                      | ~742      | Texture-based            | `standard_surface` |
+| [PhysicallyBased](https://physicallybased.info/)         | ~86       | Parametric (no textures) | `open_pbr_surface` |
 
 The output JSON is self-contained and ready for direct consumption by a Three.js viewer or any renderer that understands `MeshPhysicalMaterial` properties.
 
@@ -51,7 +51,7 @@ materialx-db/
     scripts/
         build_db.py                 # CLI: rebuild the catalog DB
         example_usage.py            # Tutorial script
-    src/materialx_lib/
+    src/materialx_db/
         __init__.py                 # Exports MaterialLibrary
         db.py                       # SQLite schema + insert helpers
         categories.py               # Canonical category mapping
@@ -68,26 +68,26 @@ materialx-db/
 
 **`materials`** table — one row per material:
 
-| Column | Type | Description |
-|---|---|---|
-| `id` | TEXT PK | Prefixed ID: `acg:Fabric038`, `gpuo:Copper_Brushed`, `ph:rusty_metal`, `pb:Gold` |
-| `source` | TEXT | `ambientcg`, `gpuopen`, `polyhaven`, `physicallybased` |
-| `name` | TEXT | Human-readable name |
-| `category` | TEXT | Canonical group (see below) |
-| `has_textures` | INTEGER | 1 = image-based, 0 = parametric only |
-| `shader_model` | TEXT | `standard_surface`, `open_pbr_surface`, etc. (set after first conversion) |
-| `thumbnail_url` | TEXT | Preview image URL from source |
-| `tags` | TEXT | JSON array of source tags |
+| Column          | Type    | Description                                                                      |
+| --------------- | ------- | -------------------------------------------------------------------------------- |
+| `id`            | TEXT PK | Prefixed ID: `acg:Fabric038`, `gpuo:Copper_Brushed`, `ph:rusty_metal`, `pb:Gold` |
+| `source`        | TEXT    | `ambientcg`, `gpuopen`, `polyhaven`, `physicallybased`                           |
+| `name`          | TEXT    | Human-readable name                                                              |
+| `category`      | TEXT    | Canonical group (see below)                                                      |
+| `has_textures`  | INTEGER | 1 = image-based, 0 = parametric only                                             |
+| `shader_model`  | TEXT    | `standard_surface`, `open_pbr_surface`, etc. (set after first conversion)        |
+| `thumbnail_url` | TEXT    | Preview image URL from source                                                    |
+| `tags`          | TEXT    | JSON array of source tags                                                        |
 
 **`material_variants`** table — one row per resolution/package:
 
-| Column | Type | Description |
-|---|---|---|
-| `material_id` | TEXT FK | References `materials.id` |
-| `resolution` | TEXT | `1K-JPG`, `2K-PNG`, `1k`, `4k`, `1k 8b`, `parametric`, etc. |
-| `download_url` | TEXT | Direct download URL |
-| `download_meta` | TEXT | JSON with source-specific download info |
-| `file_size` | INTEGER | Size in bytes (when known) |
+| Column          | Type    | Description                                                 |
+| --------------- | ------- | ----------------------------------------------------------- |
+| `material_id`   | TEXT FK | References `materials.id`                                   |
+| `resolution`    | TEXT    | `1K-JPG`, `2K-PNG`, `1k`, `4k`, `1k 8b`, `parametric`, etc. |
+| `download_url`  | TEXT    | Direct download URL                                         |
+| `download_meta` | TEXT    | JSON with source-specific download info                     |
+| `file_size`     | INTEGER | Size in bytes (when known)                                  |
 
 ### Categories
 
@@ -115,25 +115,25 @@ When `get_material()` is called for the first time on a material:
 
 ```json
 {
-  "id": "gpuo:Copper_Brushed",
-  "name": "Copper Brushed",
-  "source": "gpuopen",
-  "category": "metal",
-  "params": {
-    "map": "textures/Copper_Brushed_standard_surface_base_color.png",
-    "metalness": 1.0,
-    "roughness": 0.5,
-    "roughnessMap": "textures/Copper_Brushed_standard_surface_specular_roughness.png",
-    "normalMap": "textures/Copper_Brushed_standard_surface_normal.png",
-    "specularIntensity": 1.0,
-    "specularColor": [1.0, 1.0, 1.0],
-    "ior": 1.5
-  },
-  "textures": {
-    "textures/Copper_Brushed_standard_surface_base_color.png": "data:image/png;base64,...",
-    "textures/Copper_Brushed_standard_surface_specular_roughness.png": "data:image/png;base64,...",
-    "textures/Copper_Brushed_standard_surface_normal.png": "data:image/png;base64,..."
-  }
+    "id": "gpuo:Copper_Brushed",
+    "name": "Copper Brushed",
+    "source": "gpuopen",
+    "category": "metal",
+    "params": {
+        "map": "textures/Copper_Brushed_standard_surface_base_color.png",
+        "metalness": 1.0,
+        "roughness": 0.5,
+        "roughnessMap": "textures/Copper_Brushed_standard_surface_specular_roughness.png",
+        "normalMap": "textures/Copper_Brushed_standard_surface_normal.png",
+        "specularIntensity": 1.0,
+        "specularColor": [1.0, 1.0, 1.0],
+        "ior": 1.5
+    },
+    "textures": {
+        "textures/Copper_Brushed_standard_surface_base_color.png": "data:image/png;base64,...",
+        "textures/Copper_Brushed_standard_surface_specular_roughness.png": "data:image/png;base64,...",
+        "textures/Copper_Brushed_standard_surface_normal.png": "data:image/png;base64,..."
+    }
 }
 ```
 
@@ -143,17 +143,17 @@ Parametric materials (PhysicallyBased) have scalar `params` and an empty `textur
 
 ```json
 {
-  "id": "pb:Gold",
-  "name": "Gold",
-  "source": "physicallybased",
-  "category": "metal",
-  "params": {
-    "color": [1.059, 0.773, 0.307],
-    "metalness": 1.0,
-    "roughness": 0.0,
-    "ior": 1.5
-  },
-  "textures": {}
+    "id": "pb:Gold",
+    "name": "Gold",
+    "source": "physicallybased",
+    "category": "metal",
+    "params": {
+        "color": [1.059, 0.773, 0.307],
+        "metalness": 1.0,
+        "roughness": 0.0,
+        "ior": 1.5
+    },
+    "textures": {}
 }
 ```
 
@@ -164,7 +164,7 @@ Parametric materials (PhysicallyBased) have scalar `params` and an empty `textur
 ### `MaterialLibrary`
 
 ```python
-from materialx_lib import MaterialLibrary
+from materialx_db import MaterialLibrary
 
 lib = MaterialLibrary()          # uses ~/.materialx/materials.db
 lib = MaterialLibrary("my.db")   # custom DB path
@@ -326,7 +326,7 @@ Full working example in `scripts/example_usage.py`.
 ### Browse the catalog
 
 ```python
-from materialx_lib import MaterialLibrary
+from materialx_db import MaterialLibrary
 
 lib = MaterialLibrary()
 
@@ -443,11 +443,11 @@ const material = new THREE.MeshPhysicalMaterial(data.params);
 
 // Load base64 textures
 for (const [key, param] of Object.entries(data.params)) {
-  if (typeof param === 'string' && param.startsWith('textures/')) {
-    const dataUri = data.textures[param];
-    const texture = new THREE.TextureLoader().load(dataUri);
-    material[key] = texture;
-  }
+    if (typeof param === "string" && param.startsWith("textures/")) {
+        const dataUri = data.textures[param];
+        const texture = new THREE.TextureLoader().load(dataUri);
+        material[key] = texture;
+    }
 }
 ```
 

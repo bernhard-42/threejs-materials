@@ -20,10 +20,11 @@ import requests
 import MaterialX as mx
 from MaterialX import PyMaterialXRender as mx_render
 from MaterialX import PyMaterialXRenderGlsl as mx_render_glsl
+
 if platform == "darwin":
     from MaterialX import PyMaterialXRenderMsl as mx_render_msl
 
-from materialx_lib.db import DB_DIR
+from materialx_db.db import DB_DIR
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ BAKED_DIR = DB_DIR / "baked"
 # ---------------------------------------------------------------------------
 # MaterialX helpers (from convert_mtlx.py)
 # ---------------------------------------------------------------------------
+
 
 def load_document_with_stdlib(mtlx_path: Path):
     """Load a MaterialX document with standard library."""
@@ -53,8 +55,15 @@ def load_document_with_stdlib(mtlx_path: Path):
     return doc, search_path
 
 
-def bake_materials(doc, search_path, baked_mtlx_path: Path, tex_dir: Path,
-                   mtlx_dir: Path | None = None, width=1024, height=1024):
+def bake_materials(
+    doc,
+    search_path,
+    baked_mtlx_path: Path,
+    tex_dir: Path,
+    mtlx_dir: Path | None = None,
+    width=1024,
+    height=1024,
+):
     """Bake all materials using TextureBaker (GLSL preferred, MSL fallback)."""
     tex_dir.mkdir(parents=True, exist_ok=True)
 
@@ -374,6 +383,7 @@ def to_threejs_physical(mat: dict, textures_root_url: str = "textures") -> dict:
 # EXR → PNG conversion
 # ---------------------------------------------------------------------------
 
+
 def _convert_exr_to_png(exr_path: Path) -> Path:
     """Convert an EXR image to 8-bit PNG. Returns path to the new PNG file."""
     import array
@@ -420,6 +430,7 @@ def _convert_exr_to_png(exr_path: Path) -> Path:
 # Base64 encoding helper
 # ---------------------------------------------------------------------------
 
+
 def _encode_texture_base64(file_path: Path) -> str:
     """Read image file and return data-URI string with base64 content.
     Automatically converts EXR to PNG first."""
@@ -445,6 +456,7 @@ def _encode_texture_base64(file_path: Path) -> str:
 # Download helpers (source-specific)
 # ---------------------------------------------------------------------------
 
+
 def _download_ambientcg(download_url: str, out_dir: Path) -> Path | None:
     """Download ambientCG zip, extract .mtlx + images."""
     log.info("Downloading ambientCG zip: %s", download_url)
@@ -460,7 +472,9 @@ def _download_ambientcg(download_url: str, out_dir: Path) -> Path | None:
             if name.endswith(".mtlx"):
                 mtlx_path = out_dir / "material.mtlx"
                 mtlx_path.write_bytes(zf.read(name))
-            elif any(name.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".exr")):
+            elif any(
+                name.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".exr")
+            ):
                 dst = tex_dir / Path(name).name
                 dst.write_bytes(zf.read(name))
 
@@ -482,7 +496,9 @@ def _download_gpuopen(download_url: str, out_dir: Path) -> Path | None:
             if name.endswith(".mtlx"):
                 mtlx_path = out_dir / "material.mtlx"
                 mtlx_path.write_bytes(zf.read(name))
-            elif any(name.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".exr")):
+            elif any(
+                name.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".exr")
+            ):
                 dst = tex_dir / Path(name).name
                 dst.write_bytes(zf.read(name))
 
@@ -521,7 +537,9 @@ def _download_polyhaven(download_meta: dict, out_dir: Path) -> Path | None:
 def _generate_physicallybased(download_meta: dict, out_dir: Path) -> Path | None:
     """Generate .mtlx from PhysicallyBased parametric data (no download needed)."""
     import MaterialX as mx_mod
-    from materialxMaterials.physicallyBasedMaterialX import PhysicallyBasedMaterialLoader
+    from materialxMaterials.physicallyBasedMaterialX import (
+        PhysicallyBasedMaterialLoader,
+    )
 
     name = download_meta.get("name", "Material")
 
@@ -545,6 +563,7 @@ def _generate_physicallybased(download_meta: dict, out_dir: Path) -> Path | None
 # ---------------------------------------------------------------------------
 # Main conversion pipeline
 # ---------------------------------------------------------------------------
+
 
 def convert_material(
     material_id: str,
@@ -589,12 +608,12 @@ def convert_material(
         ).fetchone()
 
     if not var_row:
-        raise ValueError(
-            f"No variant found for {material_id} resolution={resolution}"
-        )
+        raise ValueError(f"No variant found for {material_id} resolution={resolution}")
 
     download_url = var_row["download_url"]
-    download_meta = json.loads(var_row["download_meta"]) if var_row["download_meta"] else {}
+    download_meta = (
+        json.loads(var_row["download_meta"]) if var_row["download_meta"] else {}
+    )
 
     # --- Download phase ---
     mtlx_path = None
@@ -653,8 +672,11 @@ def convert_material(
                         if not dst.exists():
                             tex_dir.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(src_path, dst)
-                        log.info("Merged missing texture %s from original: %s",
-                                 inp_name, src_path.name)
+                        log.info(
+                            "Merged missing texture %s from original: %s",
+                            inp_name,
+                            src_path.name,
+                        )
                         mats[0]["textures"][inp_name] = tex_info
                     else:
                         # Try alternative extensions (EXR→JPG/PNG)
@@ -665,11 +687,17 @@ def convert_material(
                                 if not dst.exists():
                                     tex_dir.mkdir(parents=True, exist_ok=True)
                                     shutil.copy2(alt_path, dst)
-                                alt_info = dict(tex_info, file=str(
-                                    Path(src_file).with_suffix(alt_ext)))
+                                alt_info = dict(
+                                    tex_info,
+                                    file=str(Path(src_file).with_suffix(alt_ext)),
+                                )
                                 mats[0]["textures"][inp_name] = alt_info
-                                log.info("Substituted %s → %s for %s",
-                                         src_path.name, alt_path.name, inp_name)
+                                log.info(
+                                    "Substituted %s → %s for %s",
+                                    src_path.name,
+                                    alt_path.name,
+                                    inp_name,
+                                )
                                 break
     else:
         # Parametric (PhysicallyBased) — no baking

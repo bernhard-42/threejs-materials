@@ -9,8 +9,8 @@ import requests as _requests
 
 from materialxMaterials.GPUOpenLoader import GPUOpenMaterialLoader
 
-from materialx_lib.categories import categorize_by_name
-from materialx_lib.db import insert_material, insert_variant
+from materialx_db.categories import categorize_by_name
+from materialx_db.db import insert_material, insert_variant
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +80,9 @@ def fetch_and_insert(conn: sqlite3.Connection) -> int:
             renders = item.get("renders_order") or item.get("renders") or []
             thumbnail_url = None
             if renders:
-                thumbnail_url = f"https://api.matlib.gpuopen.com/api/renders/{renders[0]}/download"
+                thumbnail_url = (
+                    f"https://api.matlib.gpuopen.com/api/renders/{renders[0]}/download"
+                )
 
             insert_material(
                 conn,
@@ -102,7 +104,9 @@ def fetch_and_insert(conn: sqlite3.Connection) -> int:
                     download_url=f"{PACKAGE_URL}/{pkg_uuid}/download",
                     download_meta={
                         "package_id": pkg_uuid,
-                        "type": "procedural" if material_type == "Parametric" else "static",
+                        "type": "procedural"
+                        if material_type == "Parametric"
+                        else "static",
                     },
                 )
 

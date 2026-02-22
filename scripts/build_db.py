@@ -11,8 +11,8 @@ import logging
 import sys
 import time
 
-from materialx_lib.db import DB_PATH, get_connection, create_tables, drop_tables
-from materialx_lib.sources import ambientcg, gpuopen, polyhaven, physicallybased
+from materialx_db.db import DB_PATH, get_connection, create_tables, drop_tables
+from materialx_db.sources import ambientcg, gpuopen, polyhaven, physicallybased
 
 ALL_SOURCES = {
     "ambientcg": ambientcg,
@@ -30,7 +30,9 @@ log = logging.getLogger("build_db")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build the MaterialX material catalog DB")
+    parser = argparse.ArgumentParser(
+        description="Build the MaterialX material catalog DB"
+    )
     parser.add_argument(
         "--sources",
         default=",".join(ALL_SOURCES),

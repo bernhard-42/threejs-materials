@@ -4,7 +4,7 @@
 import json
 import logging
 
-from materialx_lib import MaterialLibrary
+from materialx_db import MaterialLibrary
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -85,10 +85,13 @@ for mat_id, resolution, description in examples:
             b64 = mat["textures"][key]
             print(f"             {key} ({len(b64)} chars)")
     else:
-        print(f"   textures: none (parametric)")
+        print("   textures: none (parametric)")
 
     # Dump full JSON to see the structure (truncate base64 for readability)
-    compact = {**mat, "textures": {k: v[:60] + "..." for k, v in mat["textures"].items()}}
+    compact = {
+        **mat,
+        "textures": {k: v[:60] + "..." for k, v in mat["textures"].items()},
+    }
     print(f"   JSON preview: {json.dumps(compact, indent=2)[:300]}...")
 
 lib.close()

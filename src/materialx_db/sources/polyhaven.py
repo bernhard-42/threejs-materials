@@ -6,8 +6,8 @@ import sqlite3
 
 from materialxMaterials.polyHavenLoader import PolyHavenLoader
 
-from materialx_lib.categories import categorize_polyhaven, categorize_by_name
-from materialx_lib.db import insert_material, insert_variant
+from materialx_db.categories import categorize_polyhaven, categorize_by_name
+from materialx_db.db import insert_material, insert_variant
 
 log = logging.getLogger(__name__)
 

@@ -7,8 +7,8 @@ import sqlite3
 import MaterialX as mx
 from materialxMaterials.physicallyBasedMaterialX import PhysicallyBasedMaterialLoader
 
-from materialx_lib.categories import categorize_physicallybased
-from materialx_lib.db import insert_material, insert_variant
+from materialx_db.categories import categorize_physicallybased
+from materialx_db.db import insert_material, insert_variant
 
 log = logging.getLogger(__name__)
 
