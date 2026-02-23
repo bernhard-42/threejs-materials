@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from materialx_db.db import DB_PATH, get_connection, create_tables, drop_tables
-from materialx_db.convert import convert_material
+from materialx_db.convert import convert_material, convert_local_mtlx
 
 log = logging.getLogger(__name__)
 
@@ -259,6 +259,17 @@ class MaterialLibrary:
             (material_id,),
         ).fetchall()
         return {v["resolution"]: v for v in updated}
+
+    # --- Load local .mtlx file ---
+
+    def load_local_material(self, mtlx_file: str) -> dict:
+        """
+        Convert a local .mtlx file to Three.js MeshPhysicalMaterial JSON.
+
+        This does not use the database — it works directly with the file.
+        See :func:`convert_local_mtlx` for details.
+        """
+        return convert_local_mtlx(mtlx_file)
 
     # --- Rebuild DB ---
 

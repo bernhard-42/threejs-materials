@@ -33,7 +33,7 @@ The output JSON is self-contained and ready for direct consumption by a Three.js
         acg/Fabric038/              # ambientCG material
             material.mtlx           # source MaterialX document
             material.baked.mtlx     # baked MaterialX document (if baker succeeded)
-            material.json           # Three.js output (params + base64 textures)
+            material.json           # Three.js output (properties + base64 textures)
             textures/               # texture images
         gpuo/Copper_Brushed/        # GPUOpen material
             ...
@@ -52,7 +52,7 @@ materialx-db/
         build_db.py                 # CLI: rebuild the catalog DB
         example_usage.py            # Tutorial script
     src/materialx_db/
-        __init__.py                 # Exports MaterialLibrary
+        __init__.py                 # Exports MaterialLibrary, convert_local_mtlx, encode_texture_base64
         db.py                       # SQLite schema + insert helpers
         categories.py               # Canonical category mapping
         convert.py                  # Download + bake + extract pipeline
@@ -101,17 +101,18 @@ materialx-db/
 
 ### Conversion pipeline
 
-When `get_material()` is called for the first time on a material:
+When `get_material()` or `convert_local_mtlx()` is called:
 
-1. **Download** — source-specific: fetch zip (ambientCG, GPUOpen), individual files (PolyHaven), or generate from parameters (PhysicallyBased)
+1. **Download** (DB-backed only) — source-specific: fetch zip (ambientCG, GPUOpen), individual files (PolyHaven), or generate from parameters (PhysicallyBased)
 2. **Bake** — for texture-based materials, run MaterialX `TextureBaker` (GLSL preferred, MSL fallback on macOS) to flatten procedural graphs into texture images
 3. **Fallback merge** — if the baker can't handle certain textures (e.g. EXR inputs, `open_pbr_surface` shader), merge missing textures from the original document with automatic format substitution (EXR to JPG/PNG)
 4. **EXR to PNG** — convert any remaining EXR textures to 8-bit PNG
-5. **Extract** — walk the MaterialX document to map shader inputs to `MeshPhysicalMaterial` properties
-6. **Encode** — base64-encode all texture images as data URIs
-7. **Cache** — write `material.json` to disk; subsequent calls return it instantly
+5. **Extract** — walk the MaterialX document to map shader inputs to `MeshPhysicalMaterial` properties, base64-encoding textures inline
+6. **Cache** (DB-backed only) — write `material.json` to disk; subsequent calls return it instantly
 
 ### Output format
+
+Each property in the output carries a `value`, a base64-encoded `texture`, or both:
 
 ```json
 {
@@ -119,27 +120,40 @@ When `get_material()` is called for the first time on a material:
     "name": "Copper Brushed",
     "source": "gpuopen",
     "category": "metal",
-    "params": {
-        "map": "textures/Copper_Brushed_standard_surface_base_color.png",
-        "metalness": 1.0,
-        "roughness": 0.5,
-        "roughnessMap": "textures/Copper_Brushed_standard_surface_specular_roughness.png",
-        "normalMap": "textures/Copper_Brushed_standard_surface_normal.png",
-        "specularIntensity": 1.0,
-        "specularColor": [1.0, 1.0, 1.0],
-        "ior": 1.5
-    },
-    "textures": {
-        "textures/Copper_Brushed_standard_surface_base_color.png": "data:image/png;base64,...",
-        "textures/Copper_Brushed_standard_surface_specular_roughness.png": "data:image/png;base64,...",
-        "textures/Copper_Brushed_standard_surface_normal.png": "data:image/png;base64,..."
+    "properties": {
+        "color": {
+            "value": [0.944, 0.776, 0.373],
+            "texture": "data:image/png;base64,..."
+        },
+        "metalness": {
+            "value": 1.0
+        },
+        "roughness": {
+            "value": 0.5,
+            "texture": "data:image/png;base64,..."
+        },
+        "normal": {
+            "texture": "data:image/png;base64,..."
+        },
+        "specularIntensity": {
+            "value": 1.0
+        },
+        "specularColor": {
+            "value": [1.0, 1.0, 1.0]
+        },
+        "ior": {
+            "value": 1.5
+        }
     }
 }
 ```
 
-The `params` keys are Three.js `MeshPhysicalMaterial` property names. The `textures` dict maps each texture path referenced in `params` to its base64-encoded data URI.
+- `value` — scalar or array, maps directly to a `MeshPhysicalMaterial` property
+- `texture` — base64 data URI, ready to load as a Three.js `Texture`
+- Properties with only `texture` (e.g. `normal`) have no meaningful scalar fallback
+- Properties with only `value` (e.g. `ior`) are purely parametric
 
-Parametric materials (PhysicallyBased) have scalar `params` and an empty `textures` dict:
+Parametric materials (PhysicallyBased) have values only:
 
 ```json
 {
@@ -147,13 +161,12 @@ Parametric materials (PhysicallyBased) have scalar `params` and an empty `textur
     "name": "Gold",
     "source": "physicallybased",
     "category": "metal",
-    "params": {
-        "color": [1.059, 0.773, 0.307],
-        "metalness": 1.0,
-        "roughness": 0.0,
-        "ior": 1.5
-    },
-    "textures": {}
+    "properties": {
+        "color": {"value": [1.059, 0.773, 0.307]},
+        "metalness": {"value": 1.0},
+        "roughness": {"value": 0.0},
+        "ior": {"value": 1.5}
+    }
 }
 ```
 
@@ -221,14 +234,15 @@ Get a material as a Three.js-compatible dict. Downloads, bakes, and converts on 
 
 **Return type depends on context:**
 
-- `dict` — material JSON with `id`, `name`, `source`, `category`, `params`, `textures`
+- `dict` — material with `id`, `name`, `source`, `category`, `properties`
 - `list[str]` — available resolution labels (when `resolution` is omitted and multiple variants exist)
 
 **Single-variant materials** (PhysicallyBased) don't need a resolution:
 
 ```python
 mat = lib.get_material("pb:Gold")
-# -> {"id": "pb:Gold", "params": {"color": [...], "metalness": 1.0, ...}, "textures": {}}
+print(mat["properties"]["color"])
+# {'value': [1.059, 0.773, 0.307]}
 ```
 
 **Multi-variant materials** require a resolution:
@@ -238,7 +252,8 @@ lib.get_material("acg:Fabric038")
 # -> ["1K-JPG", "1K-PNG", "2K-JPG", "2K-PNG", "4K-JPG", ...]
 
 mat = lib.get_material("acg:Fabric038", resolution="1K-JPG")
-# -> {"id": "acg:Fabric038", "params": {...}, "textures": {...}}
+print(mat["properties"]["roughness"])
+# {'value': 0.5, 'texture': 'data:image/png;base64,...'}
 ```
 
 **GPUOpen staged resolution flow:**
@@ -257,6 +272,14 @@ mat = lib.get_material("gpuo:Copper_Brushed", resolution="1k 8b")
 mat = lib.get_material("gpuo:Copper_Brushed", resolution="2k 8b")
 ```
 
+#### `load_local_material(mtlx_file) -> dict`
+
+Convert a local `.mtlx` file to Three.js JSON. Does not use the database. See `convert_local_mtlx()` below.
+
+```python
+mat = lib.load_local_material("path/to/material.mtlx")
+```
+
 #### `rebuild(sources=None) -> dict[str, int]`
 
 Rebuild the catalog DB from scratch. Drops all tables and re-fetches metadata from each source's API. No material files are downloaded.
@@ -273,6 +296,50 @@ lib.rebuild(sources=["ambientcg", "polyhaven"])  # rebuild specific sources only
 #### `close()`
 
 Close the database connection.
+
+### `convert_local_mtlx(mtlx_file) -> dict`
+
+Convert a local `.mtlx` file to Three.js `MeshPhysicalMaterial` JSON without needing the database. Texture paths in the `.mtlx` are resolved relative to the file's location. Raises `FileNotFoundError` if referenced textures are missing.
+
+```python
+from materialx_db import convert_local_mtlx
+
+# Textured material (textures/ folder must exist next to the .mtlx)
+mat = convert_local_mtlx("path/to/car_paint.mtlx")
+print(mat["properties"]["roughness"])
+# {'value': 0.5, 'texture': 'data:image/png;base64,...'}
+
+# Parametric material (no textures needed)
+mat = convert_local_mtlx("path/to/gold.mtlx")
+print(mat["properties"]["color"])
+# {'value': [1.059, 0.773, 0.307]}
+```
+
+### `encode_texture_base64(file_path) -> str`
+
+Encode an image file as a base64 data URI. Automatically converts EXR to PNG. Useful for building material JSON from custom parameters and images.
+
+```python
+from materialx_db import encode_texture_base64
+
+# Encode a texture file
+data_uri = encode_texture_base64("textures/my_normal.png")
+# -> 'data:image/png;base64,iVBORw0KGgo...'
+
+# Build a custom material dict
+material = {
+    "id": "custom-material",
+    "name": "My Material",
+    "source": "local",
+    "category": "metal",
+    "properties": {
+        "color": {"value": [0.8, 0.2, 0.1]},
+        "metalness": {"value": 1.0},
+        "roughness": {"value": 0.3},
+        "normal": {"texture": encode_texture_base64("textures/normal.png")},
+    }
+}
+```
 
 ---
 
@@ -358,10 +425,10 @@ PhysicallyBased materials are parametric — no download or baking needed:
 
 ```python
 mat = lib.get_material("pb:Gold")
-print(mat["params"])
-# {'color': [1.059, 0.773, 0.307], 'metalness': 1.0, 'roughness': 0.0, 'ior': 1.5}
-print(mat["textures"])
-# {}
+print(mat["properties"]["color"])
+# {'value': [1.059, 0.773, 0.307]}
+print(mat["properties"]["metalness"])
+# {'value': 1.0}
 ```
 
 ### Load a texture-based material
@@ -376,13 +443,10 @@ print(resolutions)
 
 # Download and convert at 1K-JPG (first call takes a few seconds)
 mat = lib.get_material("acg:Fabric038", resolution="1K-JPG")
-print(mat["params"])
-# {'map': 'textures/Fabric038_1K-JPG_Color.jpg', 'metalness': 0.0, 'roughness': 0.5,
-#  'roughnessMap': 'textures/Fabric038_1K-JPG_Roughness.jpg',
-#  'normalMap': 'textures/Fabric038_1K-JPG_NormalGL.jpg', 'ior': 1.5}
-print(list(mat["textures"].keys()))
-# ['textures/Fabric038_1K-JPG_Color.jpg', 'textures/Fabric038_1K-JPG_Roughness.jpg',
-#  'textures/Fabric038_1K-JPG_NormalGL.jpg']
+print(mat["properties"]["roughness"])
+# {'value': 0.5, 'texture': 'data:image/png;base64,...'}
+print(mat["properties"]["normal"])
+# {'texture': 'data:image/png;base64,...'}
 
 # Second call returns cached result instantly
 mat = lib.get_material("acg:Fabric038", resolution="1K-JPG")
@@ -400,23 +464,54 @@ print(resolutions)
 
 # Step 2: download and bake
 mat = lib.get_material("gpuo:Copper_Brushed", resolution="1k 8b")
-print(mat["params"]["metalness"])  # 1.0
-print(list(mat["textures"].keys()))
-# ['textures/Copper_Brushed_standard_surface_base_color.png',
-#  'textures/Copper_Brushed_standard_surface_specular_roughness.png',
-#  'textures/Copper_Brushed_standard_surface_normal.png']
+print(mat["properties"]["metalness"])
+# {'value': 1.0}
+print(mat["properties"]["color"])
+# {'value': [0.944, 0.776, 0.373], 'texture': 'data:image/png;base64,...'}
 ```
 
-### Load a PolyHaven material
+### Load a local .mtlx file
 
-PolyHaven materials may include EXR textures, which are automatically converted to PNG:
+Convert a local MaterialX file without using the database:
 
 ```python
-mat = lib.get_material("ph:rusty_metal", resolution="1k")
-print(mat["params"])
-# {'map': 'textures/rusty_metal_standard_surface_base_color.png', 'metalness': 0.0,
-#  'roughness': 0.301961, 'roughnessMap': 'textures/rusty_metal_rough_1k.jpg',
-#  'normalMap': 'textures/rusty_metal_nor_gl_1k.png', ...}
+from materialx_db import convert_local_mtlx
+
+mat = convert_local_mtlx("examples/gpuo-car-paint.mtlx")
+print(mat["properties"]["clearcoat"])
+# {'value': 1.0}
+print(mat["properties"]["roughness"])
+# {'value': 0.5, 'texture': 'data:image/png;base64,...'}
+```
+
+### Build a custom material from images
+
+Use `encode_texture_base64` to create material JSON from your own textures:
+
+```python
+from materialx_db import encode_texture_base64
+
+material = {
+    "id": "my-material",
+    "name": "My Material",
+    "source": "local",
+    "category": "metal",
+    "properties": {
+        "color": {
+            "value": [0.9, 0.85, 0.7],
+            "texture": encode_texture_base64("textures/diffuse.png"),
+        },
+        "roughness": {
+            "value": 0.4,
+            "texture": encode_texture_base64("textures/roughness.png"),
+        },
+        "normal": {
+            "texture": encode_texture_base64("textures/normal.png"),
+        },
+        "metalness": {"value": 1.0},
+        "ior": {"value": 1.5},
+    }
+}
 ```
 
 ### Send to a Three.js viewer
@@ -427,9 +522,6 @@ The output JSON is designed for direct use with Three.js:
 import json
 
 mat = lib.get_material("gpuo:Copper_Brushed", resolution="1k 8b")
-
-# The params dict maps directly to MeshPhysicalMaterial properties
-# The textures dict contains base64 data URIs ready for TextureLoader
 json_str = json.dumps(mat)
 
 # Send json_str to your Three.js frontend via WebSocket, REST API, etc.
@@ -439,14 +531,20 @@ On the JavaScript side:
 
 ```javascript
 const data = JSON.parse(jsonStr);
-const material = new THREE.MeshPhysicalMaterial(data.params);
+const material = new THREE.MeshPhysicalMaterial();
 
-// Load base64 textures
-for (const [key, param] of Object.entries(data.params)) {
-    if (typeof param === "string" && param.startsWith("textures/")) {
-        const dataUri = data.textures[param];
-        const texture = new THREE.TextureLoader().load(dataUri);
-        material[key] = texture;
+for (const [key, prop] of Object.entries(data.properties)) {
+    if (prop.texture) {
+        material[key] = new THREE.TextureLoader().load(prop.texture);
+    }
+    if (prop.value !== undefined) {
+        // Set scalar/array values (color, roughness, metalness, etc.)
+        // For color properties, convert array to THREE.Color
+        if (Array.isArray(prop.value) && prop.value.length === 3) {
+            material[key] = new THREE.Color(...prop.value);
+        } else {
+            material[key] = prop.value;
+        }
     }
 }
 ```

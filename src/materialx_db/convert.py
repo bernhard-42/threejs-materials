@@ -222,161 +222,148 @@ def extract_materials(doc) -> list[dict]:
     return materials
 
 
-def to_threejs_physical(mat: dict, textures_root_url: str = "textures") -> dict:
-    """Convert extracted MaterialX material to MeshPhysicalMaterial-style dict."""
+def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
+    """Convert extracted MaterialX material to MeshPhysicalMaterial properties.
+
+    Returns ``{property: {value: ..., texture: data_uri}}``  where each
+    property carries a *value*, a base64-encoded *texture*, or both.
+    """
     p = mat["params"]
     t = mat["textures"]
     model = mat["shader_model"]
-    result = {}
+    props: dict[str, dict] = {}
 
-    def get_param(name, default=None):
-        return p.get(name, default)
+    def val(name, value):
+        props.setdefault(name, {})["value"] = value
 
-    def get_tex(name):
-        if name not in t:
-            return None
-        fname = t[name]["file"]
-        return f"{textures_root_url}/{os.path.basename(fname)}"
+    def tex(name, mtlx_input):
+        if mtlx_input not in t:
+            return
+        tex_path = base_dir / t[mtlx_input]["file"]
+        if tex_path.exists():
+            props.setdefault(name, {})["texture"] = encode_texture_base64(tex_path)
 
     if model == "standard_surface":
-        base = get_param("base", 1.0)
-        base_color = get_param("base_color", [0.8, 0.8, 0.8])
-        if get_tex("base_color"):
-            result["map"] = get_tex("base_color")
-        else:
-            result["color"] = [c * base for c in base_color]
+        base = p.get("base", 1.0)
+        base_color = p.get("base_color", [0.8, 0.8, 0.8])
+        val("color", [c * base for c in base_color])
+        tex("color", "base_color")
 
-        result["metalness"] = get_param("metalness", 0.0)
-        if get_tex("metalness"):
-            result["metalnessMap"] = get_tex("metalness")
+        val("metalness", p.get("metalness", 0.0))
+        tex("metalness", "metalness")
 
-        result["roughness"] = get_param("specular_roughness", 0.5)
-        if get_tex("specular_roughness"):
-            result["roughnessMap"] = get_tex("specular_roughness")
+        val("roughness", p.get("specular_roughness", 0.5))
+        tex("roughness", "specular_roughness")
 
-        if get_tex("normal"):
-            result["normalMap"] = get_tex("normal")
+        tex("normal", "normal")
 
-        result["specularIntensity"] = get_param("specular", 1.0)
-        result["specularColor"] = get_param("specular_color", [1.0, 1.0, 1.0])
-        result["ior"] = get_param("specular_IOR", 1.5)
+        val("specularIntensity", p.get("specular", 1.0))
+        val("specularColor", p.get("specular_color", [1.0, 1.0, 1.0]))
+        val("ior", p.get("specular_IOR", 1.5))
 
-        transmission = get_param("transmission", 0.0)
+        transmission = p.get("transmission", 0.0)
         if transmission > 0.0:
-            result["transmission"] = transmission
-            result["transparent"] = True
+            val("transmission", transmission)
+            val("transparent", True)
 
-        coat = get_param("coat", 0.0)
+        coat = p.get("coat", 0.0)
         if coat > 0.0:
-            result["clearcoat"] = coat
-            result["clearcoatRoughness"] = get_param("coat_roughness", 0.1)
+            val("clearcoat", coat)
+            val("clearcoatRoughness", p.get("coat_roughness", 0.1))
 
-        sheen = get_param("sheen", 0.0)
+        sheen = p.get("sheen", 0.0)
         if sheen > 0.0:
-            result["sheen"] = sheen
-            result["sheenColor"] = get_param("sheen_color", [1.0, 1.0, 1.0])
-            result["sheenRoughness"] = get_param("sheen_roughness", 0.3)
+            val("sheen", sheen)
+            val("sheenColor", p.get("sheen_color", [1.0, 1.0, 1.0]))
+            val("sheenRoughness", p.get("sheen_roughness", 0.3))
 
-        emission = get_param("emission", 0.0)
+        emission = p.get("emission", 0.0)
         if emission > 0.0:
-            em_color = get_param("emission_color", [1.0, 1.0, 1.0])
-            result["emissive"] = [c * emission for c in em_color]
-            result["emissiveIntensity"] = 1.0
-            if get_tex("emission_color"):
-                result["emissiveMap"] = get_tex("emission_color")
+            em_color = p.get("emission_color", [1.0, 1.0, 1.0])
+            val("emissive", [c * emission for c in em_color])
+            val("emissiveIntensity", 1.0)
+            tex("emissive", "emission_color")
 
-        tf_thickness = get_param("thin_film_thickness", 0.0)
+        tf_thickness = p.get("thin_film_thickness", 0.0)
         if tf_thickness > 0.0:
-            result["iridescence"] = 1.0
-            result["iridescenceIOR"] = get_param("thin_film_IOR", 1.5)
-            result["iridescenceThicknessRange"] = [0.0, tf_thickness]
+            val("iridescence", 1.0)
+            val("iridescenceIOR", p.get("thin_film_IOR", 1.5))
+            val("iridescenceThicknessRange", [0.0, tf_thickness])
 
-        opacity = get_param("opacity", 1.0)
+        opacity = p.get("opacity", 1.0)
         if isinstance(opacity, list):
             avg_opacity = sum(opacity) / len(opacity)
         else:
             avg_opacity = opacity
         if avg_opacity < 1.0:
-            result["opacity"] = avg_opacity
-            result["transparent"] = True
+            val("opacity", avg_opacity)
+            val("transparent", True)
 
     elif model == "gltf_pbr":
-        if get_tex("base_color"):
-            result["map"] = get_tex("base_color")
-        else:
-            result["color"] = get_param("base_color", [1.0, 1.0, 1.0])
+        val("color", p.get("base_color", [1.0, 1.0, 1.0]))
+        tex("color", "base_color")
 
-        result["metalness"] = get_param("metallic", 0.0)
-        result["roughness"] = get_param("roughness", 1.0)
-        result["ior"] = get_param("ior", 1.5)
-        result["transmission"] = get_param("transmission", 0.0)
+        val("metalness", p.get("metallic", 0.0))
+        val("roughness", p.get("roughness", 1.0))
+        val("ior", p.get("ior", 1.5))
+        val("transmission", p.get("transmission", 0.0))
 
-        if get_tex("metallic_roughness"):
-            mr = get_tex("metallic_roughness")
-            result["metalnessMap"] = mr
-            result["roughnessMap"] = mr
+        tex("metalness", "metallic_roughness")
+        tex("roughness", "metallic_roughness")
 
-        if get_tex("normal"):
-            result["normalMap"] = get_tex("normal")
+        tex("normal", "normal")
 
-        clearcoat = get_param("clearcoat", 0.0)
+        clearcoat = p.get("clearcoat", 0.0)
         if clearcoat > 0.0:
-            result["clearcoat"] = clearcoat
-            result["clearcoatRoughness"] = get_param("clearcoat_roughness", 0.0)
+            val("clearcoat", clearcoat)
+            val("clearcoatRoughness", p.get("clearcoat_roughness", 0.0))
 
-        sheen_color = get_param("sheen_color")
+        sheen_color = p.get("sheen_color")
         if sheen_color:
-            result["sheenColor"] = sheen_color
-            result["sheenRoughness"] = get_param("sheen_roughness", 0.0)
-            result["sheen"] = 1.0
+            val("sheenColor", sheen_color)
+            val("sheenRoughness", p.get("sheen_roughness", 0.0))
+            val("sheen", 1.0)
 
-        emissive = get_param("emissive", [0.0, 0.0, 0.0])
+        emissive = p.get("emissive", [0.0, 0.0, 0.0])
         if any(c > 0.0 for c in emissive):
-            result["emissive"] = emissive
-            result["emissiveIntensity"] = get_param("emissive_strength", 1.0)
-            if get_tex("emissive"):
-                result["emissiveMap"] = get_tex("emissive")
+            val("emissive", emissive)
+            val("emissiveIntensity", p.get("emissive_strength", 1.0))
+            tex("emissive", "emissive")
 
     elif model == "open_pbr_surface":
-        base_weight = get_param("base_weight", 1.0)
-        base_color = get_param("base_color", [0.8, 0.8, 0.8])
-        if get_tex("base_color"):
-            result["map"] = get_tex("base_color")
-        else:
-            result["color"] = [c * base_weight for c in base_color]
+        base_weight = p.get("base_weight", 1.0)
+        base_color = p.get("base_color", [0.8, 0.8, 0.8])
+        val("color", [c * base_weight for c in base_color])
+        tex("color", "base_color")
 
-        result["metalness"] = get_param("base_metalness", 0.0)
-        if get_tex("base_metalness"):
-            result["metalnessMap"] = get_tex("base_metalness")
+        val("metalness", p.get("base_metalness", 0.0))
+        tex("metalness", "base_metalness")
 
-        result["roughness"] = get_param("specular_roughness", 0.5)
-        if get_tex("specular_roughness"):
-            result["roughnessMap"] = get_tex("specular_roughness")
+        val("roughness", p.get("specular_roughness", 0.5))
+        tex("roughness", "specular_roughness")
 
-        if get_tex("geometry_normal"):
-            result["normalMap"] = get_tex("geometry_normal")
+        tex("normal", "geometry_normal")
 
-        result["ior"] = get_param("specular_ior", 1.5)
+        val("ior", p.get("specular_ior", 1.5))
 
-        transmission = get_param("transmission_weight", 0.0)
+        transmission = p.get("transmission_weight", 0.0)
         if transmission > 0.0:
-            result["transmission"] = transmission
-            result["transparent"] = True
+            val("transmission", transmission)
+            val("transparent", True)
 
-        coat = get_param("coat_weight", 0.0)
+        coat = p.get("coat_weight", 0.0)
         if coat > 0.0:
-            result["clearcoat"] = coat
-            result["clearcoatRoughness"] = get_param("coat_roughness", 0.0)
+            val("clearcoat", coat)
+            val("clearcoatRoughness", p.get("coat_roughness", 0.0))
 
-        emission_lum = get_param("emission_luminance", 0.0)
+        emission_lum = p.get("emission_luminance", 0.0)
         if emission_lum > 0.0:
-            em_color = get_param("emission_color", [1.0, 1.0, 1.0])
-            result["emissive"] = em_color
-            result["emissiveIntensity"] = emission_lum / 1000.0
-            if get_tex("emission_color"):
-                result["emissiveMap"] = get_tex("emission_color")
+            em_color = p.get("emission_color", [1.0, 1.0, 1.0])
+            val("emissive", em_color)
+            val("emissiveIntensity", emission_lum / 1000.0)
+            tex("emissive", "emission_color")
 
-    return result
+    return props
 
 
 # ---------------------------------------------------------------------------
@@ -431,7 +418,7 @@ def _convert_exr_to_png(exr_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _encode_texture_base64(file_path: Path) -> str:
+def encode_texture_base64(file_path: Path) -> str:
     """Read image file and return data-URI string with base64 content.
     Automatically converts EXR to PNG first."""
     # Convert EXR to PNG before encoding
@@ -561,7 +548,134 @@ def _generate_physicallybased(download_meta: dict, out_dir: Path) -> Path | None
 
 
 # ---------------------------------------------------------------------------
-# Main conversion pipeline
+# Shared conversion pipeline
+# ---------------------------------------------------------------------------
+
+
+def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
+    """Core pipeline: load → bake → extract → merge → properties.
+
+    Returns ``(properties_dict, shader_model)``.
+    """
+    base_dir = mtlx_path.parent
+    tex_dir = base_dir / "textures"
+
+    doc, search_path = load_document_with_stdlib(mtlx_path)
+    orig_mats = extract_materials(doc)
+
+    if not orig_mats:
+        raise RuntimeError(f"No materials found in {mtlx_path}")
+
+    has_textures = any(m["textures"] for m in orig_mats)
+
+    if has_textures:
+        baked_mtlx = base_dir / "material.baked.mtlx"
+        try:
+            bake_materials(
+                doc, search_path, baked_mtlx, tex_dir, mtlx_dir=base_dir,
+            )
+            baked_doc, _ = load_document_with_stdlib(baked_mtlx)
+            mats = extract_materials(baked_doc)
+        except Exception as e:
+            log.warning("Baking failed for %s: %s — using original doc", mtlx_path, e)
+            mats = []
+
+        if not mats:
+            log.info("Fallback: using original document for %s", mtlx_path.name)
+            mats = orig_mats
+
+        # Merge textures the baker missed from the original
+        if mats and orig_mats:
+            baked_tex = mats[0].get("textures", {})
+            orig_tex = orig_mats[0].get("textures", {})
+            for inp_name, tex_info in orig_tex.items():
+                if inp_name not in baked_tex:
+                    src_file = tex_info.get("file")
+                    if not src_file:
+                        continue
+                    src_path = (base_dir / src_file).resolve()
+                    if src_path.exists():
+                        dst = tex_dir / src_path.name
+                        if not dst.exists():
+                            tex_dir.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(src_path, dst)
+                        mats[0]["textures"][inp_name] = tex_info
+                    else:
+                        for alt_ext in (".jpg", ".png", ".jpeg"):
+                            alt_path = src_path.with_suffix(alt_ext)
+                            if alt_path.exists():
+                                dst = tex_dir / alt_path.name
+                                if not dst.exists():
+                                    tex_dir.mkdir(parents=True, exist_ok=True)
+                                    shutil.copy2(alt_path, dst)
+                                mats[0]["textures"][inp_name] = dict(
+                                    tex_info,
+                                    file=str(Path(src_file).with_suffix(alt_ext)),
+                                )
+                                break
+    else:
+        mats = orig_mats
+
+    mat = mats[0]
+    properties = to_threejs_physical(mat, base_dir)
+    return properties, mat.get("shader_model")
+
+
+# ---------------------------------------------------------------------------
+# Local .mtlx conversion (no DB needed)
+# ---------------------------------------------------------------------------
+
+
+def convert_local_mtlx(mtlx_file: str) -> dict:
+    """
+    Convert a local .mtlx file to Three.js MeshPhysicalMaterial JSON.
+
+    Texture paths in the .mtlx are resolved relative to the file's location.
+    If the material references textures that don't exist on disk, a
+    ``FileNotFoundError`` is raised.
+
+    Returns dict with keys: id, name, source, category, properties.
+    """
+    from materialx_db.categories import categorize_by_name
+
+    mtlx_path = Path(mtlx_file).resolve()
+    if not mtlx_path.exists():
+        raise FileNotFoundError(f"File not found: {mtlx_path}")
+
+    # Validate that referenced texture files exist
+    doc, _ = load_document_with_stdlib(mtlx_path)
+    orig_mats = extract_materials(doc)
+    if orig_mats:
+        base_dir = mtlx_path.parent
+        missing = [
+            tex_info["file"]
+            for mat in orig_mats
+            for tex_info in mat["textures"].values()
+            if tex_info.get("file") and not (base_dir / tex_info["file"]).exists()
+        ]
+        if missing:
+            raise FileNotFoundError(
+                f"Textures not found (relative to {base_dir}): {', '.join(missing)}"
+            )
+
+    baked_mtlx = mtlx_path.parent / "material.baked.mtlx"
+    try:
+        properties, _ = _process_mtlx(mtlx_path)
+    finally:
+        baked_mtlx.unlink(missing_ok=True)
+
+    name = mtlx_path.stem
+    return {
+        "id": name,
+        "name": name,
+        "source": "local",
+        "category": categorize_by_name(name),
+        "properties": properties,
+    }
+
+
+# ---------------------------------------------------------------------------
+# DB-backed conversion pipeline
 # ---------------------------------------------------------------------------
 
 
@@ -571,21 +685,17 @@ def convert_material(
     conn: sqlite3.Connection,
 ) -> Path:
     """
-    Convert a material to Three.js MeshPhysicalMaterial JSON with base64 textures.
+    Download + convert a material to Three.js MeshPhysicalMaterial JSON.
 
-    Returns path to the material.json file.
+    Returns path to the cached material.json file.
     """
-    # Sanitize material_id for filesystem (replace : with /)
     out_dir = BAKED_DIR / material_id.replace(":", "/")
-
-    # Lazy check
     json_path = out_dir / "material.json"
     if json_path.exists():
         return json_path
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Fetch material + variant info from DB
     mat_row = conn.execute(
         "SELECT * FROM materials WHERE id = ?", (material_id,)
     ).fetchone()
@@ -593,7 +703,6 @@ def convert_material(
         raise ValueError(f"Material not found: {material_id}")
 
     source = mat_row["source"]
-    has_textures = bool(mat_row["has_textures"])
 
     # Pick variant
     if resolution:
@@ -629,92 +738,9 @@ def convert_material(
     if not mtlx_path or not mtlx_path.exists():
         raise RuntimeError(f"Failed to obtain .mtlx for {material_id}")
 
-    # --- Bake phase (only for texture-based materials) ---
-    tex_dir = out_dir / "textures"
-    if has_textures:
-        baked_mtlx = out_dir / "material.baked.mtlx"
-        try:
-            bake_materials(
-                *load_document_with_stdlib(mtlx_path),
-                baked_mtlx,
-                tex_dir,
-                mtlx_dir=mtlx_path.parent.resolve(),
-            )
-            doc, _ = load_document_with_stdlib(baked_mtlx)
-            mats = extract_materials(doc)
-        except Exception as e:
-            log.warning("Baking failed for %s: %s — using original doc", material_id, e)
-            mats = []
+    # --- Shared pipeline ---
+    properties, shader_model = _process_mtlx(mtlx_path)
 
-        # Also extract from original doc to fill in any textures the baker missed
-        # (e.g. EXR files the baker can't handle)
-        orig_doc, _ = load_document_with_stdlib(mtlx_path)
-        orig_mats = extract_materials(orig_doc)
-
-        if not any(m["textures"] for m in mats):
-            # Full fallback: baker produced nothing usable
-            log.info("Fallback: using original document for %s", material_id)
-            mats = orig_mats
-
-        # Merge: for each texture in original that's missing from baked,
-        # copy the source file and add the texture reference
-        if mats and orig_mats:
-            baked_tex = mats[0].get("textures", {})
-            orig_tex = orig_mats[0].get("textures", {})
-            for inp_name, tex_info in orig_tex.items():
-                if inp_name not in baked_tex:
-                    src_file = tex_info.get("file")
-                    if not src_file:
-                        continue
-                    src_path = (mtlx_path.parent / src_file).resolve()
-                    if src_path.exists():
-                        dst = tex_dir / src_path.name
-                        if not dst.exists():
-                            tex_dir.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(src_path, dst)
-                        log.info(
-                            "Merged missing texture %s from original: %s",
-                            inp_name,
-                            src_path.name,
-                        )
-                        mats[0]["textures"][inp_name] = tex_info
-                    else:
-                        # Try alternative extensions (EXR→JPG/PNG)
-                        for alt_ext in (".jpg", ".png", ".jpeg"):
-                            alt_path = src_path.with_suffix(alt_ext)
-                            if alt_path.exists():
-                                dst = tex_dir / alt_path.name
-                                if not dst.exists():
-                                    tex_dir.mkdir(parents=True, exist_ok=True)
-                                    shutil.copy2(alt_path, dst)
-                                alt_info = dict(
-                                    tex_info,
-                                    file=str(Path(src_file).with_suffix(alt_ext)),
-                                )
-                                mats[0]["textures"][inp_name] = alt_info
-                                log.info(
-                                    "Substituted %s → %s for %s",
-                                    src_path.name,
-                                    alt_path.name,
-                                    inp_name,
-                                )
-                                break
-    else:
-        # Parametric (PhysicallyBased) — no baking
-        doc, _ = load_document_with_stdlib(mtlx_path)
-        mats = extract_materials(doc)
-
-    if not mats:
-        raise RuntimeError(f"No materials extracted from {material_id}")
-
-    # Use first material
-    mat = mats[0]
-
-    # --- Extract phase → Three.js JSON ---
-    threejs_params = to_threejs_physical(mat, textures_root_url="textures")
-
-    # Detect shader_model and update DB if needed
-    shader_model = mat.get("shader_model")
     if shader_model and not mat_row["shader_model"]:
         conn.execute(
             "UPDATE materials SET shader_model = ? WHERE id = ?",
@@ -722,30 +748,12 @@ def convert_material(
         )
         conn.commit()
 
-    # --- Build base64 texture dict (EXR files are converted to PNG) ---
-    textures_b64 = {}
-    for key, val in list(threejs_params.items()):
-        if isinstance(val, str) and val.startswith("textures/"):
-            tex_file = tex_dir / Path(val).name
-            if tex_file.exists():
-                b64_data = _encode_texture_base64(tex_file)
-                # If EXR was converted to PNG, update the key and param
-                if tex_file.suffix.lower() == ".exr":
-                    png_name = tex_file.with_suffix(".png").name
-                    new_val = f"textures/{png_name}"
-                    threejs_params[key] = new_val
-                    textures_b64[new_val] = b64_data
-                else:
-                    textures_b64[val] = b64_data
-
-    # --- Write output JSON ---
     output = {
         "id": material_id,
         "name": mat_row["name"],
         "source": source,
         "category": mat_row["category"],
-        "params": threejs_params,
-        "textures": textures_b64,
+        "properties": properties,
     }
 
     json_path.write_text(json.dumps(output, indent=2))
