@@ -40,7 +40,7 @@ def load_document_with_stdlib(mtlx_path: Path):
 
     valid, msg = doc.validate()
     if not valid:
-        log.warning("Validation warnings: %s", msg)
+        log.debug("Validation warnings: %s", msg)
     return doc, search_path
 
 
@@ -328,8 +328,13 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         val("metalness", p.get("base_metalness", 0.0))
         tex("metalness", "base_metalness")
 
-        val("roughness", p.get("specular_roughness", 0.5))
+        val("roughness", p.get("specular_roughness", 0.3))
         tex("roughness", "specular_roughness")
+
+        spec_color = p.get("specular_color")
+        if spec_color:
+            val("specularIntensity", 1.0)
+            val("specularColor", spec_color)
 
         tex("normal", "geometry_normal")
 
@@ -339,6 +344,17 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         if transmission > 0.0:
             val("transmission", transmission)
             val("transparent", True)
+            tx_color = p.get("transmission_color")
+            if tx_color:
+                val("attenuationColor", tx_color)
+            tx_depth = p.get("transmission_depth")
+            if tx_depth and tx_depth > 0.0:
+                val("attenuationDistance", tx_depth)
+
+        # Dispersion: Abbe number → Three.js dispersion (= 20 / V_d)
+        abbe = p.get("transmission_dispersion_abbe_number")
+        if abbe and abbe > 0:
+            val("dispersion", 20.0 / abbe)
 
         coat = p.get("coat_weight", 0.0)
         if coat > 0.0:
@@ -351,6 +367,14 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             val("emissive", em_color)
             val("emissiveIntensity", emission_lum / 1000.0)
             tex("emissive", "emission_color")
+
+        tf_weight = p.get("thin_film_weight", 0.0)
+        if tf_weight > 0.0:
+            val("iridescence", tf_weight)
+            val("iridescenceIOR", p.get("thin_film_ior", 1.5))
+            # thin_film_thickness is in μm; Three.js expects nm
+            tf_thickness_um = p.get("thin_film_thickness", 0.5)
+            val("iridescenceThicknessRange", [0.0, tf_thickness_um * 1000.0])
 
     return props
 
@@ -508,53 +532,3 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
     mat = mats[0]
     properties = to_threejs_physical(mat, base_dir)
     return properties, mat.get("shader_model")
-
-
-# ---------------------------------------------------------------------------
-# Local .mtlx conversion
-# ---------------------------------------------------------------------------
-
-
-def convert_local_mtlx(mtlx_file: str) -> dict:
-    """
-    Convert a local .mtlx file to Three.js MeshPhysicalMaterial JSON.
-
-    Texture paths in the .mtlx are resolved relative to the file's location.
-    If the material references textures that don't exist on disk, a
-    ``FileNotFoundError`` is raised.
-
-    Returns dict with keys: id, name, source, properties.
-    """
-    mtlx_path = Path(mtlx_file).resolve()
-    if not mtlx_path.exists():
-        raise FileNotFoundError(f"File not found: {mtlx_path}")
-
-    # Validate that referenced texture files exist
-    doc, _ = load_document_with_stdlib(mtlx_path)
-    orig_mats = extract_materials(doc)
-    if orig_mats:
-        base_dir = mtlx_path.parent
-        missing = [
-            tex_info["file"]
-            for mat in orig_mats
-            for tex_info in mat["textures"].values()
-            if tex_info.get("file") and not (base_dir / tex_info["file"]).exists()
-        ]
-        if missing:
-            raise FileNotFoundError(
-                f"Textures not found (relative to {base_dir}): {', '.join(missing)}"
-            )
-
-    baked_mtlx = mtlx_path.parent / "material.baked.mtlx"
-    try:
-        properties, _ = _process_mtlx(mtlx_path)
-    finally:
-        baked_mtlx.unlink(missing_ok=True)
-
-    name = mtlx_path.stem
-    return {
-        "id": name,
-        "name": name,
-        "source": "local",
-        "properties": properties,
-    }
