@@ -90,6 +90,11 @@ class Material:
 
     __slots__ = ("id", "name", "source", "url", "license", "properties")
 
+    ambientcg = _SourceLoader(MaterialSource.ambientCG, "ambientcg")
+    gpuopen = _SourceLoader(MaterialSource.GPUOpen, "gpuopen")
+    polyhaven = _SourceLoader(MaterialSource.PolyHaven, "polyhaven")
+    physicallybased = _SourceLoader(MaterialSource.PhysicallyBased, "physicallybased")
+
     def __init__(self, data: dict):
         self.id: str = data["id"]
         self.name: str = data["name"]
@@ -277,10 +282,3 @@ class Material:
 
     def __contains__(self, key: str) -> bool:
         return key in self.to_dict()
-
-
-# Source accessors — set after class body since they reference Material
-Material.ambientcg = _SourceLoader(MaterialSource.ambientCG, "ambientcg")
-Material.gpuopen = _SourceLoader(MaterialSource.GPUOpen, "gpuopen")
-Material.polyhaven = _SourceLoader(MaterialSource.PolyHaven, "polyhaven")
-Material.physicallybased = _SourceLoader(MaterialSource.PhysicallyBased, "physicallybased")
