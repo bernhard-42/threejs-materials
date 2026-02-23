@@ -4,12 +4,12 @@ A Python library that downloads PBR materials on demand from four open sources a
 
 ## Sources
 
-| Source | Type | Shader model |
-|---|---|---|
-| [ambientCG](https://ambientcg.com/) | Texture-based | `open_pbr_surface` |
-| [GPUOpen MaterialX Library](https://matlib.gpuopen.com/) | Procedural (baked) | `standard_surface` |
-| [PolyHaven](https://polyhaven.com/) | Texture-based | `standard_surface` |
-| [PhysicallyBased](https://physicallybased.info/) | Parametric (no textures) | `open_pbr_surface` |
+| Source                                                   | Type                     | Shader model       |
+| -------------------------------------------------------- | ------------------------ | ------------------ |
+| [ambientCG](https://ambientcg.com/)                      | Texture-based            | `open_pbr_surface` |
+| [GPUOpen MaterialX Library](https://matlib.gpuopen.com/) | Procedural (baked)       | `standard_surface` |
+| [PolyHaven](https://polyhaven.com/)                      | Texture-based            | `standard_surface` |
+| [PhysicallyBased](https://physicallybased.info/)         | Parametric (no textures) | `open_pbr_surface` |
 
 Browse materials on the source websites, then load them by name.
 
@@ -28,17 +28,17 @@ uv sync        # or: pip install -e .
 
 ## API
 
-### `load_material(source, name, resolution=None) -> dict`
+### `Material.{source}.load(name, resolution="1K") -> Material`
 
 Download, convert, and cache a material.
 
 ```python
-from materialx_db import load_material
+from materialx_db import Material
 
-mat = load_material(source="gpuopen", name="Car Paint", resolution="1K")
-mat = load_material(source="ambientcg", name="Onyx015", resolution="1K")
-mat = load_material(source="polyhaven", name="plank_flooring_04", resolution="1K")
-mat = load_material(source="physicallybased", name="Titanium")
+mat = Material.gpuopen.load("Car Paint", resolution="1K")
+mat = Material.ambientcg.load("Onyx015", resolution="1K")
+mat = Material.polyhaven.load("plank_flooring_04", resolution="1K")
+mat = Material.physicallybased.load("Titanium")
 ```
 
 The first call downloads and converts the material (takes a few seconds). Subsequent calls return the cached JSON instantly from `~/.materialx-cache/`.
@@ -48,37 +48,37 @@ The first call downloads and converts the material (takes a few seconds). Subseq
 Pass a normalized resolution (`1K`, `2K`, `4K`, `8K` — case-insensitive). Each source maps it to its native format:
 
 | Input | GPUOpen | ambientCG | PolyHaven | PhysicallyBased |
-|---|---|---|---|---|
-| 1K | 1k 8b | 1K-PNG | 1k | n/a |
-| 2K | 2k 8b | 2K-PNG | 2k | n/a |
-| 4K | 4k 8b | 4K-PNG | 4k | n/a |
-| 8K | — | 8K-PNG | 8k | n/a |
+| ----- | ------- | --------- | --------- | --------------- |
+| 1K    | 1k 8b   | 1K-PNG    | 1k        | n/a             |
+| 2K    | 2k 8b   | 2K-PNG    | 2k        | n/a             |
+| 4K    | 4k 8b   | 4K-PNG    | 4k        | n/a             |
+| 8K    | —       | 8K-PNG    | 8k        | n/a             |
 
 PhysicallyBased materials are parametric — no resolution needed (and not accepted).
 
-### `list_sources() -> dict`
+### `Material.list_sources()`
 
 Print available sources with clickable URLs.
 
 ```python
-from materialx_db import list_sources
+from materialx_db import Material
 
-list_sources()
+Material.list_sources()
 # Material sources:
-#   ambientcg: https://ambientcg.com/list?type=material
-#   gpuopen: https://matlib.gpuopen.com/main/materials/all
-#   polyhaven: https://polyhaven.com/textures
-#   physicallybased: https://physicallybased.info/
+#   Material.ambientCG        https://ambientcg.com/list?type=material
+#   Material.GPUOpen          https://matlib.gpuopen.com/main/materials/all
+#   Material.PolyHaven        https://polyhaven.com/textures
+#   Material.PhysicallyBased  https://physicallybased.info/
 ```
 
-### `convert_local_mtlx(mtlx_file) -> dict`
+### `Material.from_mtlx(mtlx_file) -> Material`
 
 Convert a local `.mtlx` file without downloading anything.
 
 ```python
-from materialx_db import convert_local_mtlx
+from materialx_db import Material
 
-mat = convert_local_mtlx("examples/gpuo-car-paint.mtlx")
+mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
 ```
 
 Texture paths in the `.mtlx` are resolved relative to the file's location.
@@ -144,11 +144,11 @@ Converted materials are cached as flat JSON files in `~/.materialx-cache/`:
     physicallybased_titanium.json
 ```
 
-To force re-conversion, delete the cached file and call `load_material()` again.
+To force re-conversion, delete the cached file and call `.load()` again.
 
 ## Conversion pipeline
 
-When `load_material()` or `convert_local_mtlx()` is called:
+When a material is loaded:
 
 1. **Download** — source-specific: fetch ZIP (ambientCG, GPUOpen), individual files (PolyHaven), or generate from parameters (PhysicallyBased)
 2. **Bake** — run MaterialX `TextureBaker` (GLSL preferred, MSL fallback on macOS) to flatten procedural graphs into texture images
