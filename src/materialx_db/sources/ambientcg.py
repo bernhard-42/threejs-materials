@@ -9,6 +9,11 @@ import requests
 
 log = logging.getLogger(__name__)
 
+LICENSE = "CC0 1.0"
+
+def material_url(name: str) -> str:
+    return f"https://ambientcg.com/view?id={name}"
+
 RESOLUTION_MAP = {
     "1K": "1K-PNG",
     "2K": "2K-PNG",

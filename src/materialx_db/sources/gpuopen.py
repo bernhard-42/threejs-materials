@@ -11,6 +11,8 @@ log = logging.getLogger(__name__)
 
 API_BASE = "https://api.matlib.gpuopen.com/api"
 
+LICENSE = None  # per-material, fetched from API
+
 RESOLUTION_MAP = {
     "1K": "1k 8b",
     "2K": "2k 8b",
@@ -18,13 +20,18 @@ RESOLUTION_MAP = {
 }
 
 
-def download(name: str, resolution: str, out_dir: Path) -> Path:
+def material_url(name: str, material_id: str = "") -> str:
+    if material_id:
+        return f"https://matlib.gpuopen.com/main/materials/all?id={material_id}"
+    return "https://matlib.gpuopen.com/main/materials/all"
+
+def download(name: str, resolution: str, out_dir: Path) -> tuple[Path, str, str]:
     """Download a GPUOpen material ZIP and extract .mtlx + textures.
 
     *name* is the material title (e.g. ``"Car Paint"``).
     *resolution* is the already-mapped label from RESOLUTION_MAP (e.g. ``"1k 8b"``).
 
-    Returns the path to the extracted ``.mtlx`` file.
+    Returns ``(mtlx_path, license, url)`` tuple.
     """
     # Search for the material by name
     log.info("Searching GPUOpen for '%s'", name)
@@ -49,6 +56,9 @@ def download(name: str, resolution: str, out_dir: Path) -> Path:
             break
     if material is None:
         material = results[0]
+
+    mat_license = material.get("license", "Unknown")
+    mat_url = material_url(name, material.get("id", ""))
 
     packages = material.get("packages", [])
     if not packages:
@@ -82,7 +92,7 @@ def download(name: str, resolution: str, out_dir: Path) -> Path:
     if not mtlx_path or not mtlx_path.exists():
         raise RuntimeError(f"No .mtlx found in GPUOpen ZIP for '{name}'")
 
-    return mtlx_path
+    return mtlx_path, mat_license, mat_url
 
 
 def _find_package(package_uuids: list[str], resolution: str) -> str:

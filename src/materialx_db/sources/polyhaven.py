@@ -7,6 +7,11 @@ import requests
 
 log = logging.getLogger(__name__)
 
+LICENSE = "CC0 1.0"
+
+def material_url(name: str) -> str:
+    return f"https://polyhaven.com/a/{name.replace(' ', '_').lower()}"
+
 RESOLUTION_MAP = {
     "1K": "1k",
     "2K": "2k",
@@ -25,6 +30,8 @@ def download(name: str, resolution: str, out_dir: Path) -> Path:
 
     Returns the path to the downloaded ``.mtlx`` file.
     """
+    name = name.replace(" ", "_").lower()
+
     # Fetch file listing for this asset
     log.info("Fetching PolyHaven files for '%s'", name)
     resp = requests.get(
