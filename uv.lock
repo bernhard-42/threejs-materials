@@ -116,31 +116,17 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "materialx" },
-    { name = "materialxmaterials" },
     { name = "openexr" },
+    { name = "pillow" },
     { name = "requests" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "materialx", specifier = ">=1.39.4" },
-    { name = "materialxmaterials", specifier = ">=1.39.4" },
     { name = "openexr", specifier = ">=3.3" },
+    { name = "pillow", specifier = ">=10.0" },
     { name = "requests", specifier = ">=2.31.0" },
-]
-
-[[package]]
-name = "materialxmaterials"
-version = "1.39.4"
-source = { registry = "http://banach.local:8000/simple/" }
-dependencies = [
-    { name = "materialx" },
-    { name = "pillow" },
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c1/84/370758018774b6cbdb3bf7c2c376d19a9b66cdbf77040feea04cd9194515/materialxMaterials-1.39.4.tar.gz", hash = "sha256:595c782f6e0d988c5dafccb64e6b77999b48c7a8e2e33b3f0d934ac58f3b7e8d", size = 36536, upload-time = "2025-09-16T13:17:55.813Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/0e/dc04f2fce5c1c9dc6c75f4a685d7b70af3f400e5fb3591e3abd49a7e194a/materialxMaterials-1.39.4-py3-none-any.whl", hash = "sha256:fa9bbec444bf5bf8a63f5a27e771512b31005d85be9d3c1fc40c42eb24fbcc4a", size = 37385, upload-time = "2025-09-16T13:17:54.905Z" },
 ]
 
 [[package]]

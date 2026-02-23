@@ -4,95 +4,70 @@
 import json
 import logging
 
-from materialx_db import MaterialLibrary
+from materialx_db import list_sources, load_material, convert_local_mtlx
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-lib = MaterialLibrary()
-
-# ── 1) List materials by category ─────────────────────────────────────────
+# ── 1) List available sources ────────────────────────────────────────────
 
 print("=" * 60)
-print("1) Materials in category 'metal'")
+print("1) Available material sources")
 print("=" * 60)
-metals = lib.list_materials(category="metal")
-print(f"   Found {len(metals)} metals")
-for m in metals[:8]:
-    print(f"   {m.id:40s} {m.name}")
-if len(metals) > 8:
-    print(f"   ... and {len(metals) - 8} more")
+sources = list_sources()
 
-# ── 2) List materials by source ───────────────────────────────────────────
+# ── 2) Load materials from each source ───────────────────────────────────
 
 print()
 print("=" * 60)
-print("2) Materials from GPUOpen")
-print("=" * 60)
-gpuopen = lib.list_materials(source="gpuopen")
-print(f"   Found {len(gpuopen)} GPUOpen materials")
-for m in gpuopen[:8]:
-    print(f"   {m.id:40s} {m.name}")
-if len(gpuopen) > 8:
-    print(f"   ... and {len(gpuopen) - 8} more")
-
-# ── 3) List materials by source + category ────────────────────────────────
-
-print()
-print("=" * 60)
-print("3) PolyHaven materials in category 'stone'")
-print("=" * 60)
-ph_stone = lib.list_materials(source="polyhaven", category="stone")
-print(f"   Found {len(ph_stone)} PolyHaven stone materials")
-for m in ph_stone[:8]:
-    print(f"   {m.id:40s} {m.name}")
-if len(ph_stone) > 8:
-    print(f"   ... and {len(ph_stone) - 8} more")
-
-# ── 4) Load one material from each source ─────────────────────────────────
-
-print()
-print("=" * 60)
-print("4) Load a material from each source")
+print("2) Load a material from each source")
 print("=" * 60)
 
 examples = [
-    # (material_id, resolution, description)
-    ("pb:Gold", None, "PhysicallyBased — parametric, no textures"),
-    ("acg:Fabric038", "1K-JPG", "ambientCG — open_pbr_surface with textures"),
-    ("ph:rusty_metal", "1k", "PolyHaven — standard_surface with textures"),
-    ("gpuo:Copper_Brushed", "1k 8b", "GPUOpen — standard_surface, baked procedural"),
+    # (source, name, resolution, description)
+    ("physicallybased", "Gold", None, "PhysicallyBased — parametric, no textures"),
+    ("ambientcg", "Fabric038", "1K", "ambientCG — open_pbr_surface with textures"),
+    ("polyhaven", "rusty_metal", "1k", "PolyHaven — standard_surface with textures"),
+    ("gpuopen", "Copper Brushed", "1K", "GPUOpen — standard_surface, baked procedural"),
 ]
 
-for mat_id, resolution, description in examples:
+for source, name, resolution, description in examples:
     print(f"\n   --- {description} ---")
-    print(f"   Loading {mat_id}" + (f" at {resolution}" if resolution else "") + " ...")
+    res_str = f" at {resolution}" if resolution else ""
+    print(f"   Loading {source}/{name}{res_str} ...")
 
-    mat = lib.get_material(mat_id, resolution=resolution)
-
-    # GPUOpen staged flow: first call without resolution returns label list
-    if isinstance(mat, list):
-        print(f"   Available resolutions: {mat}")
-        mat = lib.get_material(mat_id, resolution=resolution)
+    mat = load_material(source=source, name=name, resolution=resolution)
 
     print(f"   id:       {mat['id']}")
     print(f"   name:     {mat['name']}")
     print(f"   source:   {mat['source']}")
-    print(f"   category: {mat['category']}")
-    print(f"   params:   {mat['params']}")
-    if mat["textures"]:
-        print(f"   textures: {len(mat['textures'])} files")
-        for key in mat["textures"]:
-            b64 = mat["textures"][key]
-            print(f"             {key} ({len(b64)} chars)")
-    else:
-        print("   textures: none (parametric)")
+    props = mat["properties"]
+    for key, prop in props.items():
+        has_val = "value" in prop
+        has_tex = "texture" in prop
+        parts = []
+        if has_val:
+            parts.append(f"value={prop['value']}")
+        if has_tex:
+            parts.append(f"texture=({len(prop['texture'])} chars)")
+        print(f"     {key}: {', '.join(parts)}")
 
-    # Dump full JSON to see the structure (truncate base64 for readability)
-    compact = {
-        **mat,
-        "textures": {k: v[:60] + "..." for k, v in mat["textures"].items()},
-    }
-    print(f"   JSON preview: {json.dumps(compact, indent=2)[:300]}...")
+# ── 3) Load a local .mtlx file ──────────────────────────────────────────
 
-lib.close()
+print()
+print("=" * 60)
+print("3) Load a local .mtlx file")
+print("=" * 60)
+
+mat = convert_local_mtlx("examples/gpuo-car-paint.mtlx")
+print(f"   name:     {mat['name']}")
+for key, prop in mat["properties"].items():
+    has_val = "value" in prop
+    has_tex = "texture" in prop
+    parts = []
+    if has_val:
+        parts.append(f"value={prop['value']}")
+    if has_tex:
+        parts.append(f"texture=({len(prop['texture'])} chars)")
+    print(f"     {key}: {', '.join(parts)}")
+
 print("\nDone.")

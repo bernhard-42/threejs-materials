@@ -1,22 +1,15 @@
 """
-Download + bake + extract → MeshPhysicalMaterial JSON with base64-encoded textures.
-
-Reuses proven logic from the experimental convert_mtlx.py.
+Bake + extract → MeshPhysicalMaterial JSON with base64-encoded textures.
 """
 
 import base64
-import io
-import json
 import logging
 import mimetypes
 import os
 import shutil
-import sqlite3
-import zipfile
 from pathlib import Path
 from sys import platform
 
-import requests
 import MaterialX as mx
 from MaterialX import PyMaterialXRender as mx_render
 from MaterialX import PyMaterialXRenderGlsl as mx_render_glsl
@@ -24,15 +17,11 @@ from MaterialX import PyMaterialXRenderGlsl as mx_render_glsl
 if platform == "darwin":
     from MaterialX import PyMaterialXRenderMsl as mx_render_msl
 
-from materialx_db.db import DB_DIR
-
 log = logging.getLogger(__name__)
-
-BAKED_DIR = DB_DIR / "baked"
 
 
 # ---------------------------------------------------------------------------
-# MaterialX helpers (from convert_mtlx.py)
+# MaterialX helpers
 # ---------------------------------------------------------------------------
 
 
@@ -384,7 +373,7 @@ def _convert_exr_to_png(exr_path: Path) -> Path:
     width = dw.max.x - dw.min.x + 1
     height = dw.max.y - dw.min.y + 1
 
-    # Determine channels (typically R, G, B — may also have A)
+    # Determine channels
     channel_names = list(header["channels"].keys())
     rgb = [ch for ch in ("R", "G", "B") if ch in channel_names]
     if not rgb:
@@ -394,18 +383,26 @@ def _convert_exr_to_png(exr_path: Path) -> Path:
     pt = Imath.PixelType(Imath.PixelType.FLOAT)
     raw = exr_file.channels(rgb, pt)
 
-    # Convert float channel buffers → 8-bit pixels in RGB interleaved order
     num_pixels = width * height
-    pixels = bytearray(num_pixels * len(rgb))
-    for ch_idx, ch_data in enumerate(raw):
-        floats = array.array("f", ch_data)
+
+    if len(rgb) == 1:
+        # Single-channel (e.g. roughness, displacement) → grayscale
+        floats = array.array("f", raw[0])
+        pixels = bytearray(num_pixels)
         for i, val in enumerate(floats):
-            clamped = max(0.0, min(1.0, val))
-            pixels[i * len(rgb) + ch_idx] = int(clamped * 255 + 0.5)
+            pixels[i] = int(max(0.0, min(1.0, val)) * 255 + 0.5)
+        mode = "L"
+    else:
+        # Multi-channel → RGB interleaved
+        pixels = bytearray(num_pixels * len(rgb))
+        for ch_idx, ch_data in enumerate(raw):
+            floats = array.array("f", ch_data)
+            for i, val in enumerate(floats):
+                clamped = max(0.0, min(1.0, val))
+                pixels[i * len(rgb) + ch_idx] = int(clamped * 255 + 0.5)
+        mode = "RGB" if len(rgb) == 3 else "RGBA"
 
     from PIL import Image
-
-    mode = "RGB" if len(rgb) == 3 else "RGBA"
     img = Image.frombytes(mode, (width, height), bytes(pixels))
     png_path = exr_path.with_suffix(".png")
     img.save(png_path)
@@ -437,114 +434,6 @@ def encode_texture_base64(file_path: Path) -> str:
     data = file_path.read_bytes()
     b64 = base64.b64encode(data).decode("ascii")
     return f"data:{mime};base64,{b64}"
-
-
-# ---------------------------------------------------------------------------
-# Download helpers (source-specific)
-# ---------------------------------------------------------------------------
-
-
-def _download_ambientcg(download_url: str, out_dir: Path) -> Path | None:
-    """Download ambientCG zip, extract .mtlx + images."""
-    log.info("Downloading ambientCG zip: %s", download_url)
-    resp = requests.get(download_url, timeout=120)
-    resp.raise_for_status()
-
-    tex_dir = out_dir / "textures"
-    tex_dir.mkdir(parents=True, exist_ok=True)
-
-    mtlx_path = None
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-        for name in zf.namelist():
-            if name.endswith(".mtlx"):
-                mtlx_path = out_dir / "material.mtlx"
-                mtlx_path.write_bytes(zf.read(name))
-            elif any(
-                name.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".exr")
-            ):
-                dst = tex_dir / Path(name).name
-                dst.write_bytes(zf.read(name))
-
-    return mtlx_path
-
-
-def _download_gpuopen(download_url: str, out_dir: Path) -> Path | None:
-    """Download GPUOpen package zip, extract .mtlx + images."""
-    log.info("Downloading GPUOpen package: %s", download_url)
-    resp = requests.get(download_url, timeout=120)
-    resp.raise_for_status()
-
-    tex_dir = out_dir / "textures"
-    tex_dir.mkdir(parents=True, exist_ok=True)
-
-    mtlx_path = None
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-        for name in zf.namelist():
-            if name.endswith(".mtlx"):
-                mtlx_path = out_dir / "material.mtlx"
-                mtlx_path.write_bytes(zf.read(name))
-            elif any(
-                name.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".exr")
-            ):
-                dst = tex_dir / Path(name).name
-                dst.write_bytes(zf.read(name))
-
-    return mtlx_path
-
-
-def _download_polyhaven(download_meta: dict, out_dir: Path) -> Path | None:
-    """Download PolyHaven .mtlx and individual texture files."""
-    mtlx_url = download_meta.get("mtlx_url")
-    if not mtlx_url:
-        log.error("No mtlx_url in PolyHaven download_meta")
-        return None
-
-    headers = {"User-Agent": "MTLX_Polyaven_Loader/1.0"}
-
-    log.info("Downloading PolyHaven mtlx: %s", mtlx_url)
-    resp = requests.get(mtlx_url, headers=headers, timeout=60)
-    resp.raise_for_status()
-    mtlx_path = out_dir / "material.mtlx"
-    mtlx_path.write_text(resp.text)
-
-    tex_dir = out_dir / "textures"
-    tex_dir.mkdir(parents=True, exist_ok=True)
-
-    texture_urls = download_meta.get("texture_urls", {})
-    for tex_path, tex_url in texture_urls.items():
-        log.info("Downloading texture: %s", tex_url)
-        tex_resp = requests.get(tex_url, headers=headers, timeout=120)
-        tex_resp.raise_for_status()
-        dst = tex_dir / Path(tex_path).name
-        dst.write_bytes(tex_resp.content)
-
-    return mtlx_path
-
-
-def _generate_physicallybased(download_meta: dict, out_dir: Path) -> Path | None:
-    """Generate .mtlx from PhysicallyBased parametric data (no download needed)."""
-    import MaterialX as mx_mod
-    from materialxMaterials.physicallyBasedMaterialX import (
-        PhysicallyBasedMaterialLoader,
-    )
-
-    name = download_meta.get("name", "Material")
-
-    loader = PhysicallyBasedMaterialLoader(mx_mod, None)
-    loader.materials = [download_meta]
-    loader.materialNames = [name]
-
-    loader.convertToMaterialX([name], "open_pbr_surface", {}, "OpenPBR")
-    mtlx_string = loader.convertToMaterialXString()
-
-    if not mtlx_string:
-        log.error("Failed to generate MaterialX for %s", name)
-        return None
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    mtlx_path = out_dir / "material.mtlx"
-    mtlx_path.write_text(mtlx_string)
-    return mtlx_path
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +511,7 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
 
 
 # ---------------------------------------------------------------------------
-# Local .mtlx conversion (no DB needed)
+# Local .mtlx conversion
 # ---------------------------------------------------------------------------
 
 
@@ -634,10 +523,8 @@ def convert_local_mtlx(mtlx_file: str) -> dict:
     If the material references textures that don't exist on disk, a
     ``FileNotFoundError`` is raised.
 
-    Returns dict with keys: id, name, source, category, properties.
+    Returns dict with keys: id, name, source, properties.
     """
-    from materialx_db.categories import categorize_by_name
-
     mtlx_path = Path(mtlx_file).resolve()
     if not mtlx_path.exists():
         raise FileNotFoundError(f"File not found: {mtlx_path}")
@@ -669,93 +556,5 @@ def convert_local_mtlx(mtlx_file: str) -> dict:
         "id": name,
         "name": name,
         "source": "local",
-        "category": categorize_by_name(name),
         "properties": properties,
     }
-
-
-# ---------------------------------------------------------------------------
-# DB-backed conversion pipeline
-# ---------------------------------------------------------------------------
-
-
-def convert_material(
-    material_id: str,
-    resolution: str | None,
-    conn: sqlite3.Connection,
-) -> Path:
-    """
-    Download + convert a material to Three.js MeshPhysicalMaterial JSON.
-
-    Returns path to the cached material.json file.
-    """
-    out_dir = BAKED_DIR / material_id.replace(":", "/")
-    json_path = out_dir / "material.json"
-    if json_path.exists():
-        return json_path
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    mat_row = conn.execute(
-        "SELECT * FROM materials WHERE id = ?", (material_id,)
-    ).fetchone()
-    if not mat_row:
-        raise ValueError(f"Material not found: {material_id}")
-
-    source = mat_row["source"]
-
-    # Pick variant
-    if resolution:
-        var_row = conn.execute(
-            "SELECT * FROM material_variants WHERE material_id = ? AND resolution = ?",
-            (material_id, resolution),
-        ).fetchone()
-    else:
-        var_row = conn.execute(
-            "SELECT * FROM material_variants WHERE material_id = ? ORDER BY rowid LIMIT 1",
-            (material_id,),
-        ).fetchone()
-
-    if not var_row:
-        raise ValueError(f"No variant found for {material_id} resolution={resolution}")
-
-    download_url = var_row["download_url"]
-    download_meta = (
-        json.loads(var_row["download_meta"]) if var_row["download_meta"] else {}
-    )
-
-    # --- Download phase ---
-    mtlx_path = None
-    if source == "ambientcg":
-        mtlx_path = _download_ambientcg(download_url, out_dir)
-    elif source == "gpuopen":
-        mtlx_path = _download_gpuopen(download_url, out_dir)
-    elif source == "polyhaven":
-        mtlx_path = _download_polyhaven(download_meta, out_dir)
-    elif source == "physicallybased":
-        mtlx_path = _generate_physicallybased(download_meta, out_dir)
-
-    if not mtlx_path or not mtlx_path.exists():
-        raise RuntimeError(f"Failed to obtain .mtlx for {material_id}")
-
-    # --- Shared pipeline ---
-    properties, shader_model = _process_mtlx(mtlx_path)
-
-    if shader_model and not mat_row["shader_model"]:
-        conn.execute(
-            "UPDATE materials SET shader_model = ? WHERE id = ?",
-            (shader_model, material_id),
-        )
-        conn.commit()
-
-    output = {
-        "id": material_id,
-        "name": mat_row["name"],
-        "source": source,
-        "category": mat_row["category"],
-        "properties": properties,
-    }
-
-    json_path.write_text(json.dumps(output, indent=2))
-    log.info("Wrote %s", json_path)
-    return json_path

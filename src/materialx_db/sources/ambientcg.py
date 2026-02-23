@@ -1,60 +1,50 @@
-"""Fetch ambientCG catalog metadata into the materials DB."""
+"""ambientCG: download a material by name + resolution."""
 
-import json
+import io
 import logging
-import sqlite3
+import zipfile
+from pathlib import Path
 
-import MaterialX as mx
-from materialxMaterials.ambientCGLoader import AmbientCGLoader
-
-from materialx_db.categories import categorize_by_name
-from materialx_db.db import insert_material, insert_variant
+import requests
 
 log = logging.getLogger(__name__)
 
+RESOLUTION_MAP = {
+    "1K": "1K-PNG",
+    "2K": "2K-PNG",
+    "4K": "4K-PNG",
+    "8K": "8K-PNG",
+}
 
-def fetch_and_insert(conn: sqlite3.Connection) -> int:
-    """Fetch ambientCG material list and insert into DB. Returns count of materials."""
-    loader = AmbientCGLoader(mx, None)
-    materials = loader.downloadMaterialsList()
-    if not materials:
-        log.warning("ambientCG returned no materials")
-        return 0
 
-    # Group by assetId
-    by_asset: dict[str, list[dict]] = {}
-    for item in materials:
-        asset_id = item["assetId"]
-        by_asset.setdefault(asset_id, []).append(item)
+def download(name: str, resolution: str, out_dir: Path) -> Path:
+    """Download an ambientCG material ZIP and extract .mtlx + textures.
 
-    count = 0
-    for asset_id, variants in by_asset.items():
-        mat_id = f"acg:{asset_id}"
-        category = categorize_by_name(asset_id)
-        thumbnail_url = f"https://acg-media.struffelproductions.com/file/acg-media/catalog/{asset_id}/{asset_id}_Preview.png"
+    *name* is the assetId (e.g. ``"Onyx015"``).
+    *resolution* is the already-mapped value from RESOLUTION_MAP (e.g. ``"1K-PNG"``).
 
-        insert_material(
-            conn,
-            id=mat_id,
-            source="ambientcg",
-            name=asset_id,
-            category=category,
-            has_textures=True,
-            thumbnail_url=thumbnail_url,
-        )
+    Returns the path to the extracted ``.mtlx`` file.
+    """
+    url = f"https://ambientCG.com/get?file={name}_{resolution}.zip"
+    log.info("Downloading ambientCG: %s", url)
+    resp = requests.get(url, timeout=120)
+    resp.raise_for_status()
 
-        for v in variants:
-            resolution = v.get("downloadAttribute", "unknown")
-            insert_variant(
-                conn,
-                material_id=mat_id,
-                resolution=resolution,
-                download_url=v.get("downloadLink"),
-                download_meta={"format": "zip_with_mtlx"},
-                file_size=int(v["size"]) if v.get("size") else None,
-            )
+    mtlx_path = None
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        for entry in zf.namelist():
+            if entry.endswith(".mtlx"):
+                mtlx_path = out_dir / "material.mtlx"
+                mtlx_path.write_bytes(zf.read(entry))
+            elif any(
+                entry.lower().endswith(ext)
+                for ext in (".png", ".jpg", ".jpeg", ".exr")
+            ):
+                # Extract next to .mtlx (ambientCG references textures without subdirectory)
+                dst = out_dir / Path(entry).name
+                dst.write_bytes(zf.read(entry))
 
-        count += 1
+    if not mtlx_path or not mtlx_path.exists():
+        raise RuntimeError(f"No .mtlx found in ambientCG ZIP for {name}")
 
-    conn.commit()
-    return count
+    return mtlx_path

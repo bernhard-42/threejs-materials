@@ -1,64 +1,68 @@
-"""Fetch PhysicallyBased catalog metadata into the materials DB."""
+"""PhysicallyBased: fetch a parametric material by name."""
 
-import json
 import logging
-import sqlite3
 
-import MaterialX as mx
-from materialxMaterials.physicallyBasedMaterialX import PhysicallyBasedMaterialLoader
-
-from materialx_db.categories import categorize_physicallybased
-from materialx_db.db import insert_material, insert_variant
+import requests
 
 log = logging.getLogger(__name__)
 
+API_URL = "https://api.physicallybased.info/materials"
 
-def fetch_and_insert(conn: sqlite3.Connection) -> int:
-    """Fetch PhysicallyBased material list and insert into DB. Returns count of materials."""
-    loader = PhysicallyBasedMaterialLoader(mx, None)
-    materials = loader.getMaterialsFromURL()
-    if not materials:
-        log.warning("PhysicallyBased returned no materials")
-        return 0
+RESOLUTION_MAP = {}  # no resolution needed
 
-    count = 0
-    for mat in materials:
-        name = mat.get("name", "")
-        mat_id = f"pb:{name}"
 
-        # Category from the material's category field
-        categories = mat.get("category", [])
-        if categories:
-            category = categorize_physicallybased(categories[0])
-        else:
-            category = "other"
+def download(name: str) -> dict:
+    """Fetch a PhysicallyBased material and return Three.js properties directly.
 
-        # Reference image as thumbnail
-        refs = mat.get("reference", [])
-        thumbnail_url = refs[0] if refs else None
+    *name* is the material name (e.g. ``"Titanium"``).
 
-        tags = mat.get("tags", [])
+    Returns a ``properties`` dict ready for the output JSON
+    (no .mtlx intermediate needed — these are purely parametric).
+    """
+    log.info("Fetching PhysicallyBased materials list")
+    resp = requests.get(API_URL, timeout=10)
+    resp.raise_for_status()
+    materials = resp.json()
 
-        insert_material(
-            conn,
-            id=mat_id,
-            source="physicallybased",
-            name=name,
-            category=category,
-            has_textures=False,
-            thumbnail_url=thumbnail_url,
-            tags=tags if tags else None,
+    # Find by name (case-insensitive)
+    mat = None
+    for m in materials:
+        if m.get("name", "").lower() == name.lower():
+            mat = m
+            break
+
+    if mat is None:
+        available = sorted(m.get("name", "") for m in materials)
+        raise RuntimeError(
+            f"PhysicallyBased: material '{name}' not found. "
+            f"Available ({len(available)}): {', '.join(available[:20])}..."
         )
 
-        # Store full material data as the download_meta — no download needed
-        insert_variant(
-            conn,
-            material_id=mat_id,
-            resolution="parametric",
-            download_meta=mat,
-        )
+    return _to_threejs_properties(mat)
 
-        count += 1
 
-    conn.commit()
-    return count
+def _to_threejs_properties(mat: dict) -> dict:
+    """Map PhysicallyBased API fields to MeshPhysicalMaterial properties."""
+    props = {}
+
+    color = mat.get("color")
+    if color:
+        props["color"] = {"value": color}
+
+    metalness = mat.get("metalness")
+    if metalness is not None:
+        props["metalness"] = {"value": float(metalness)}
+
+    roughness = mat.get("roughness")
+    if roughness is not None:
+        props["roughness"] = {"value": float(roughness)}
+
+    ior = mat.get("ior")
+    if ior is not None:
+        props["ior"] = {"value": float(ior)}
+
+    specular_color = mat.get("specularColor")
+    if specular_color:
+        props["specularColor"] = {"value": specular_color}
+
+    return props
