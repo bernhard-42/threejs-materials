@@ -88,7 +88,8 @@ class _SourceLoader:
 class Material:
     """A loaded PBR material with Three.js MeshPhysicalMaterial properties."""
 
-    __slots__ = ("id", "name", "source", "url", "license", "properties")
+    __slots__ = ("id", "name", "source", "url", "license", "properties",
+                 "color_override", "texture_repeat")
 
     ambientcg = _SourceLoader(MaterialSource.ambientCG, "ambientcg")
     gpuopen = _SourceLoader(MaterialSource.GPUOpen, "gpuopen")
@@ -102,6 +103,8 @@ class Material:
         self.url: str = data["url"]
         self.license: str = data["license"]
         self.properties: dict = data["properties"]
+        self.color_override: tuple | None = data.get("color_override")
+        self.texture_repeat: tuple | None = data.get("texture_repeat")
 
     @classmethod
     def _load(
@@ -246,9 +249,26 @@ class Material:
             "properties": properties,
         })
 
+    def override(self, color=None, repeat=None) -> "Material":
+        """Return a new Material with color and/or texture repeat overrides.
+
+        Parameters
+        ----------
+        color : tuple[float, float, float], optional
+            Linear RGB color override, e.g. ``(0.8, 0.1, 0.2)``.
+        repeat : tuple[float, float], optional
+            Texture tiling ``(u, v)``, e.g. ``(3, 3)``.
+        """
+        data = self.to_dict()
+        if color is not None:
+            data["color_override"] = tuple(color)
+        if repeat is not None:
+            data["texture_repeat"] = tuple(repeat)
+        return Material(data)
+
     def to_dict(self) -> dict:
         """Return the full material as a plain dict (including complete base64 textures)."""
-        return {
+        d = {
             "id": self.id,
             "name": self.name,
             "source": self.source,
@@ -256,6 +276,11 @@ class Material:
             "license": self.license,
             "properties": self.properties,
         }
+        if self.color_override is not None:
+            d["colorOverride"] = list(self.color_override)
+        if self.texture_repeat is not None:
+            d["textureRepeat"] = list(self.texture_repeat)
+        return d
 
     def to_json(self, **kwargs) -> str:
         """Serialize to JSON string. Keyword args are passed to ``json.dumps``."""
