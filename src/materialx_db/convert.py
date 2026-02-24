@@ -225,6 +225,10 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
     def val(name, value):
         props.setdefault(name, {})["value"] = value
 
+    def has_tex(mtlx_input):
+        """Check if a MaterialX input has a valid texture file."""
+        return mtlx_input in t and (base_dir / t[mtlx_input]["file"]).exists()
+
     def tex(name, mtlx_input):
         if mtlx_input not in t:
             return
@@ -233,15 +237,22 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             props.setdefault(name, {})["texture"] = encode_texture_base64(tex_path)
 
     if model == "standard_surface":
+        # Three.js multiplies scalar × texture for all map properties.
+        # When a texture exists, set scalar to neutral so texture controls fully.
+        # The baker's output already reflects the intended diffuse brightness;
+        # applying `base` again would double-darken the result.
         base = p.get("base", 1.0)
         base_color = p.get("base_color", [0.8, 0.8, 0.8])
-        val("color", [c * base for c in base_color])
+        if has_tex("base_color"):
+            val("color", [1.0, 1.0, 1.0])
+        else:
+            val("color", [c * base for c in base_color])
         tex("color", "base_color")
 
-        val("metalness", p.get("metalness", 0.0))
+        val("metalness", 1.0 if has_tex("metalness") else p.get("metalness", 0.0))
         tex("metalness", "metalness")
 
-        val("roughness", p.get("specular_roughness", 0.5))
+        val("roughness", 1.0 if has_tex("specular_roughness") else p.get("specular_roughness", 0.5))
         tex("roughness", "specular_roughness")
 
         tex("normal", "normal")
@@ -287,13 +298,16 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         if avg_opacity < 1.0:
             val("opacity", avg_opacity)
             val("transparent", True)
+        tex("opacity", "opacity")
 
     elif model == "gltf_pbr":
-        val("color", p.get("base_color", [1.0, 1.0, 1.0]))
+        # Three.js multiplies scalar × texture — set scalar to neutral when texture exists.
+        val("color", [1.0, 1.0, 1.0] if has_tex("base_color") else p.get("base_color", [1.0, 1.0, 1.0]))
         tex("color", "base_color")
 
-        val("metalness", p.get("metallic", 0.0))
-        val("roughness", p.get("roughness", 1.0))
+        has_mr_tex = has_tex("metallic_roughness")
+        val("metalness", 1.0 if has_mr_tex else p.get("metallic", 0.0))
+        val("roughness", 1.0 if has_mr_tex else p.get("roughness", 1.0))
         val("ior", p.get("ior", 1.5))
         val("transmission", p.get("transmission", 0.0))
 
@@ -320,15 +334,19 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             tex("emissive", "emissive")
 
     elif model == "open_pbr_surface":
+        # Three.js multiplies scalar × texture — set to neutral when texture exists.
         base_weight = p.get("base_weight", 1.0)
         base_color = p.get("base_color", [0.8, 0.8, 0.8])
-        val("color", [c * base_weight for c in base_color])
+        if has_tex("base_color"):
+            val("color", [1.0, 1.0, 1.0])
+        else:
+            val("color", [c * base_weight for c in base_color])
         tex("color", "base_color")
 
-        val("metalness", p.get("base_metalness", 0.0))
+        val("metalness", 1.0 if has_tex("base_metalness") else p.get("base_metalness", 0.0))
         tex("metalness", "base_metalness")
 
-        val("roughness", p.get("specular_roughness", 0.3))
+        val("roughness", 1.0 if has_tex("specular_roughness") else p.get("specular_roughness", 0.3))
         tex("roughness", "specular_roughness")
 
         spec_color = p.get("specular_color")
@@ -481,6 +499,7 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
 
     has_textures = any(m["textures"] for m in orig_mats)
 
+    used_baker = False
     if has_textures:
         baked_mtlx = base_dir / "material.baked.mtlx"
         try:
@@ -489,6 +508,7 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
             )
             baked_doc, _ = load_document_with_stdlib(baked_mtlx)
             mats = extract_materials(baked_doc)
+            used_baker = bool(mats)
         except Exception as e:
             log.warning("Baking failed for %s: %s — using original doc", mtlx_path, e)
             mats = []
@@ -497,12 +517,16 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
             log.info("Fallback: using original document for %s", mtlx_path.name)
             mats = orig_mats
 
-        # Merge textures the baker missed from the original
-        if mats and orig_mats:
+        # Merge textures the baker missed from the original.
+        # Skip if the baker intentionally collapsed the texture to a scalar
+        # (present in baked params) — the raw original texture may have been
+        # processed through MaterialX nodes and shouldn't be used directly.
+        if mats and orig_mats and mats is not orig_mats:
             baked_tex = mats[0].get("textures", {})
+            baked_params = mats[0].get("params", {})
             orig_tex = orig_mats[0].get("textures", {})
             for inp_name, tex_info in orig_tex.items():
-                if inp_name not in baked_tex:
+                if inp_name not in baked_tex and inp_name not in baked_params:
                     src_file = tex_info.get("file")
                     if not src_file:
                         continue
