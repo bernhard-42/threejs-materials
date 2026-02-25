@@ -106,6 +106,10 @@ def parse_value(value_str: str, type_str: str):
         return [float(x.strip()) for x in value_str.split(",")]
     if type_str in ("color4", "vector4"):
         return [float(x.strip()) for x in value_str.split(",")]
+    if type_str == "vector2":
+        return [float(x.strip()) for x in value_str.split(",")]
+    if type_str in ("matrix33", "matrix44"):
+        return [float(x.strip()) for x in value_str.split(",")]
     if type_str == "integer":
         return int(value_str)
     if type_str == "boolean":
@@ -234,7 +238,11 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             return
         tex_path = base_dir / t[mtlx_input]["file"]
         if tex_path.exists():
-            props.setdefault(name, {})["texture"] = encode_texture_base64(tex_path)
+            entry = props.setdefault(name, {})
+            entry["texture"] = encode_texture_base64(tex_path)
+            cs = t[mtlx_input].get("colorspace")
+            if cs:
+                entry["colorSpace"] = cs
 
     if model == "standard_surface":
         # Three.js multiplies scalar × texture for all map properties.
@@ -280,25 +288,33 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         emission = p.get("emission", 0.0)
         if emission > 0.0:
             em_color = p.get("emission_color", [1.0, 1.0, 1.0])
-            val("emissive", [c * emission for c in em_color])
-            val("emissiveIntensity", 1.0)
+            if has_tex("emission_color"):
+                # Baked texture already includes emission color; use neutral scalar
+                val("emissive", [1.0, 1.0, 1.0])
+            else:
+                val("emissive", [c * emission for c in em_color])
+            val("emissiveIntensity", emission)
             tex("emissive", "emission_color")
 
         tf_thickness = p.get("thin_film_thickness", 0.0)
         if tf_thickness > 0.0:
             val("iridescence", 1.0)
             val("iridescenceIOR", p.get("thin_film_IOR", 1.5))
-            val("iridescenceThicknessRange", [0.0, tf_thickness])
+            # thin_film_thickness is in μm; Three.js expects nm
+            val("iridescenceThicknessRange", [0.0, tf_thickness * 1000.0])
 
-        opacity = p.get("opacity", 1.0)
-        if isinstance(opacity, list):
-            avg_opacity = sum(opacity) / len(opacity)
-        else:
-            avg_opacity = opacity
-        if avg_opacity < 1.0:
-            val("opacity", avg_opacity)
-            val("transparent", True)
-        tex("opacity", "opacity")
+        # Only apply opacity when transmission is not active
+        # (transmission subsumes opacity; combining them causes double attenuation)
+        if transmission <= 0.0:
+            opacity = p.get("opacity", 1.0)
+            if isinstance(opacity, list):
+                avg_opacity = sum(opacity) / len(opacity)
+            else:
+                avg_opacity = opacity
+            if avg_opacity < 1.0:
+                val("opacity", avg_opacity)
+                val("transparent", True)
+            tex("opacity", "opacity")
 
     elif model == "gltf_pbr":
         # Three.js multiplies scalar × texture — set scalar to neutral when texture exists.
@@ -309,10 +325,24 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         val("metalness", 1.0 if has_mr_tex else p.get("metallic", 0.0))
         val("roughness", 1.0 if has_mr_tex else p.get("roughness", 1.0))
         val("ior", p.get("ior", 1.5))
-        val("transmission", p.get("transmission", 0.0))
 
-        tex("metalness", "metallic_roughness")
-        tex("roughness", "metallic_roughness")
+        transmission = p.get("transmission", 0.0)
+        val("transmission", transmission)
+        if transmission > 0.0:
+            att_color = p.get("attenuation_color")
+            if att_color:
+                val("attenuationColor", att_color)
+            att_dist = p.get("attenuation_distance")
+            if att_dist and att_dist > 0.0:
+                val("attenuationDistance", att_dist)
+            thickness = p.get("thickness")
+            if thickness and thickness > 0.0:
+                val("thickness", thickness)
+
+        # glTF metallic-roughness is a packed texture (G=roughness, B=metalness).
+        # Encode once under a dedicated key; consumer assigns to both maps.
+        if has_mr_tex:
+            tex("metallicRoughness", "metallic_roughness")
 
         tex("normal", "normal")
 
@@ -349,10 +379,12 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         val("roughness", 1.0 if has_tex("specular_roughness") else p.get("specular_roughness", 0.3))
         tex("roughness", "specular_roughness")
 
+        spec_weight = p.get("specular_weight", 1.0)
         spec_color = p.get("specular_color")
-        if spec_color:
-            val("specularIntensity", 1.0)
-            val("specularColor", spec_color)
+        if spec_color or spec_weight != 1.0:
+            val("specularIntensity", spec_weight)
+            if spec_color:
+                val("specularColor", spec_color)
 
         tex("normal", "geometry_normal")
 
@@ -406,8 +438,14 @@ def _convert_exr_to_png(exr_path: Path) -> Path:
     """Convert an EXR image to 8-bit PNG. Returns path to the new PNG file."""
     import array
 
-    import Imath
-    import OpenEXR
+    try:
+        import Imath
+        import OpenEXR
+    except ImportError as e:
+        raise ImportError(
+            "OpenEXR and Imath are required to convert EXR textures. "
+            "Install with: pip install OpenEXR"
+        ) from e
 
     exr_file = OpenEXR.InputFile(str(exr_path))
     header = exr_file.header()
@@ -419,7 +457,12 @@ def _convert_exr_to_png(exr_path: Path) -> Path:
     channel_names = list(header["channels"].keys())
     rgb = [ch for ch in ("R", "G", "B") if ch in channel_names]
     if not rgb:
-        rgb = sorted(channel_names)[:3]
+        # Try case-insensitive match, preserving R,G,B order
+        lower_map = {ch.lower(): ch for ch in channel_names}
+        rgb = [lower_map[c] for c in ("r", "g", "b") if c in lower_map]
+    if not rgb:
+        # Last resort: take channels in source order (don't sort alphabetically)
+        rgb = channel_names[:3]
 
     # Read channel data as 32-bit float
     pt = Imath.PixelType(Imath.PixelType.FLOAT)
@@ -483,6 +526,25 @@ def encode_texture_base64(file_path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _safe_copy(src: Path, dst_dir: Path) -> Path:
+    """Copy src into dst_dir, avoiding overwrites from different source files."""
+    dst = dst_dir / src.name
+    if dst.exists():
+        if dst.read_bytes() == src.read_bytes():
+            return dst
+        # Collision: different file with same name. Add numeric suffix.
+        stem, suffix = src.stem, src.suffix
+        counter = 1
+        while True:
+            dst = dst_dir / f"{stem}_{counter}{suffix}"
+            if not dst.exists():
+                break
+            counter += 1
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    return dst
+
+
 def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
     """Core pipeline: load → bake → extract → merge → properties.
 
@@ -532,22 +594,15 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
                         continue
                     src_path = (base_dir / src_file).resolve()
                     if src_path.exists():
-                        dst = tex_dir / src_path.name
-                        if not dst.exists():
-                            tex_dir.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(src_path, dst)
-                        mats[0]["textures"][inp_name] = tex_info
+                        dst = _safe_copy(src_path, tex_dir)
+                        mats[0]["textures"][inp_name] = dict(tex_info, file=dst.name)
                     else:
                         for alt_ext in (".jpg", ".png", ".jpeg"):
                             alt_path = src_path.with_suffix(alt_ext)
                             if alt_path.exists():
-                                dst = tex_dir / alt_path.name
-                                if not dst.exists():
-                                    tex_dir.mkdir(parents=True, exist_ok=True)
-                                    shutil.copy2(alt_path, dst)
+                                dst = _safe_copy(alt_path, tex_dir)
                                 mats[0]["textures"][inp_name] = dict(
-                                    tex_info,
-                                    file=str(Path(src_file).with_suffix(alt_ext)),
+                                    tex_info, file=dst.name,
                                 )
                                 break
     else:
