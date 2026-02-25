@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 import shutil
+import threading
 from pathlib import Path
 from sys import platform
 
@@ -18,6 +19,8 @@ if platform == "darwin":
     from MaterialX import PyMaterialXRenderMsl as mx_render_msl
 
 log = logging.getLogger(__name__)
+
+_bake_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -71,24 +74,25 @@ def bake_materials(
     tex_dir = tex_dir.resolve()
     baker_out = tex_dir / baked_mtlx_path.name
 
-    orig_dir = os.getcwd()
-    if mtlx_dir:
-        os.chdir(mtlx_dir)
-    try:
-        # Suppress C++ stdout/stderr from TextureBaker
-        with open(os.devnull, "w") as devnull:
-            old_stdout, old_stderr = os.dup(1), os.dup(2)
-            os.dup2(devnull.fileno(), 1)
-            os.dup2(devnull.fileno(), 2)
-            try:
-                baker.bakeAllMaterials(doc, search_path, str(baker_out))
-            finally:
-                os.dup2(old_stdout, 1)
-                os.dup2(old_stderr, 2)
-                os.close(old_stdout)
-                os.close(old_stderr)
-    finally:
-        os.chdir(orig_dir)
+    with _bake_lock:
+        orig_dir = os.getcwd()
+        if mtlx_dir:
+            os.chdir(mtlx_dir)
+        try:
+            # Suppress C++ stdout/stderr from TextureBaker
+            with open(os.devnull, "w") as devnull:
+                old_stdout, old_stderr = os.dup(1), os.dup(2)
+                os.dup2(devnull.fileno(), 1)
+                os.dup2(devnull.fileno(), 2)
+                try:
+                    baker.bakeAllMaterials(doc, search_path, str(baker_out))
+                finally:
+                    os.dup2(old_stdout, 1)
+                    os.dup2(old_stderr, 2)
+                    os.close(old_stdout)
+                    os.close(old_stderr)
+        finally:
+            os.chdir(orig_dir)
 
     if baked_mtlx_path != baker_out:
         baked_mtlx_path.write_text(baker_out.read_text())
@@ -558,6 +562,13 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
 
     if not orig_mats:
         raise RuntimeError(f"No materials found in {mtlx_path}")
+
+    if len(orig_mats) > 1:
+        log.warning(
+            "Document contains %d materials, using only the first ('%s')",
+            len(orig_mats),
+            orig_mats[0]["name"],
+        )
 
     has_textures = any(m["textures"] for m in orig_mats)
 

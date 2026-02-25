@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import shutil
 import tempfile
 from enum import Enum
 from pathlib import Path
@@ -206,6 +207,41 @@ class Material:
             print(f"  {label:<{width + 10}}  {url}")
 
     @classmethod
+    def clear_cache(cls, name: str | None = None, source: str | None = None) -> int:
+        """Delete cached material files.
+
+        Parameters
+        ----------
+        name : str, optional
+            Only clear caches whose filename contains this name (case-insensitive).
+        source : str, optional
+            Only clear caches whose filename starts with this source prefix.
+
+        Returns
+        -------
+        int
+            Number of files deleted.
+        """
+        if not CACHE_DIR.exists():
+            return 0
+        if name is None and source is None:
+            count = sum(1 for f in CACHE_DIR.iterdir() if f.is_file())
+            shutil.rmtree(CACHE_DIR)
+            return count
+        count = 0
+        for f in CACHE_DIR.iterdir():
+            if not f.is_file() or f.suffix != ".json":
+                continue
+            fname = f.name.lower()
+            if source and not fname.startswith(source.lower() + "_"):
+                continue
+            if name and name.lower().replace(" ", "_") not in fname:
+                continue
+            f.unlink()
+            count += 1
+        return count
+
+    @classmethod
     def from_mtlx(cls, mtlx_file: str) -> "Material":
         """Convert a local .mtlx file to a Material.
 
@@ -260,10 +296,8 @@ class Material:
             Texture tiling ``(u, v)``, e.g. ``(3, 3)``.
         """
         data = self.to_dict()
-        if color is not None:
-            data["color_override"] = tuple(color)
-        if repeat is not None:
-            data["texture_repeat"] = tuple(repeat)
+        data["color_override"] = tuple(color) if color is not None else self.color_override
+        data["texture_repeat"] = tuple(repeat) if repeat is not None else self.texture_repeat
         return Material(data)
 
     def to_dict(self) -> dict:
