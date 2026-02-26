@@ -117,6 +117,20 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 
 ## Common API
 
+### `material.override(**props, repeat=None) -> Material`
+
+Return a new `Material` with property and/or texture repeat overrides. The original material is not modified.
+
+```python
+mat = Material.gpuopen.load("Car Paint")
+
+red_paint = mat.override(color=(0.8, 0.1, 0.1))
+rough_red = mat.override(color=(0.8, 0.1, 0.1), roughness=0.9)
+tiled     = mat.override(repeat=(3, 3))
+```
+
+Overrides set the `value` of the named property, creating it if absent. Existing textures are preserved. Calls can be chained: `mat.override(color=(1,0,0)).override(repeat=(2,2))`.
+
 ### `encode_texture_base64(file_path) -> str`
 
 Encode an image file as a base64 data URI. Automatically converts EXR to PNG.
