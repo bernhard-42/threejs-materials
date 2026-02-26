@@ -53,6 +53,7 @@ def make_mtlx_string(
     shader_model="standard_surface",
     params=None,
     extra_materials=None,
+    displacement=None,
 ):
     """Build a minimal MaterialX XML string for testing.
 
@@ -67,11 +68,16 @@ def make_mtlx_string(
     extra_materials : list[dict], optional
         Additional materials to include. Each dict has keys:
         name, shader_model, params (same format as above).
+    displacement : dict, optional
+        Displacement config with optional keys ``scale`` (float) and
+        ``texture_file`` (str).  Generates a ``<displacement>`` node,
+        an ``<image>`` node wired to it, and a ``displacementshader``
+        input on the material node.
     """
     if params is None:
         params = {}
 
-    def _shader_block(name, model, p, indent="  "):
+    def _shader_block(name, model, p, indent="  ", disp=None):
         shader_name = f"{name}_shader"
         lines = [f'{indent}<{model} name="{shader_name}" type="surfaceshader">']
         for inp_name, (inp_type, inp_val) in p.items():
@@ -79,6 +85,38 @@ def make_mtlx_string(
                 f'{indent}  <input name="{inp_name}" type="{inp_type}" value="{inp_val}" />'
             )
         lines.append(f"{indent}</{model}>")
+
+        # Optional displacement node
+        disp_lines = []
+        if disp:
+            disp_node_name = f"{name}_disp"
+            img_node_name = f"{name}_disp_img"
+            if disp.get("texture_file"):
+                disp_lines.append(
+                    f'{indent}<image name="{img_node_name}" type="float">'
+                )
+                disp_lines.append(
+                    f'{indent}  <input name="file" type="filename"'
+                    f' value="{disp["texture_file"]}" />'
+                )
+                disp_lines.append(f"{indent}</image>")
+            disp_lines.append(
+                f'{indent}<displacement name="{disp_node_name}" type="displacementshader">'
+            )
+            if disp.get("texture_file"):
+                disp_lines.append(
+                    f'{indent}  <input name="displacement" type="float"'
+                    f' nodename="{img_node_name}" />'
+                )
+            if disp.get("scale") is not None:
+                disp_lines.append(
+                    f'{indent}  <input name="scale" type="float"'
+                    f' value="{disp["scale"]}" />'
+                )
+            disp_lines.append(f"{indent}</displacement>")
+
+        lines.extend(disp_lines)
+
         lines.append(
             f'{indent}<surfacematerial name="{name}" type="material">'
         )
@@ -86,10 +124,15 @@ def make_mtlx_string(
             f'{indent}  <input name="surfaceshader" type="surfaceshader"'
             f' nodename="{shader_name}" />'
         )
+        if disp:
+            lines.append(
+                f'{indent}  <input name="displacementshader" type="displacementshader"'
+                f' nodename="{disp_node_name}" />'
+            )
         lines.append(f"{indent}</surfacematerial>")
         return "\n".join(lines)
 
-    blocks = [_shader_block(mat_name, shader_model, params)]
+    blocks = [_shader_block(mat_name, shader_model, params, disp=displacement)]
     if extra_materials:
         for em in extra_materials:
             blocks.append(

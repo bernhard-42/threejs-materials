@@ -239,7 +239,9 @@ class TestToThreejsPhysical:
         }
         props = to_threejs_physical(mat, tmp_path)
         assert props["transmission"]["value"] == 0.8
-        assert props["transparent"]["value"] is True
+        # transparent should NOT be set — Three.js handles transmissive
+        # objects in a dedicated render pass.
+        assert "transparent" not in props
         # opacity should NOT be set when transmission is active
         assert "opacity" not in props
 
@@ -284,7 +286,7 @@ class TestToThreejsPhysical:
             "params": {
                 "base": 1.0,
                 "base_color": [1.0, 1.0, 1.0],
-                "thin_film_thickness": 0.5,
+                "thin_film_thickness": 500.0,
                 "thin_film_IOR": 1.3,
             },
             "textures": {},
@@ -292,7 +294,7 @@ class TestToThreejsPhysical:
         props = to_threejs_physical(mat, tmp_path)
         assert props["iridescence"]["value"] == 1.0
         assert props["iridescenceIOR"]["value"] == 1.3
-        # 0.5 μm → 500 nm
+        # standard_surface thin_film_thickness is already in nm; pass through directly
         assert props["iridescenceThicknessRange"]["value"] == [0.0, 500.0]
 
     def test_gltf_pbr_basic(self, tmp_path):
@@ -331,6 +333,11 @@ class TestToThreejsPhysical:
         # With packed texture, scalars should be neutral (1.0)
         assert props["metalness"]["value"] == 1.0
         assert props["roughness"]["value"] == 1.0
+        # Channel mapping metadata
+        assert props["metallicRoughness"]["channelMapping"] == {
+            "roughness": "g",
+            "metalness": "b",
+        }
 
     def test_gltf_pbr_emission(self, tmp_path):
         mat = {
@@ -439,7 +446,9 @@ class TestToThreejsPhysical:
         }
         props = to_threejs_physical(mat, tmp_path)
         assert props["transmission"]["value"] == 0.9
-        assert props["transparent"]["value"] is True
+        # transparent should NOT be set — Three.js handles transmissive
+        # objects in a dedicated render pass.
+        assert "transparent" not in props
         assert props["attenuationColor"]["value"] == [0.9, 0.95, 1.0]
         assert props["attenuationDistance"]["value"] == 0.3
 
@@ -520,7 +529,172 @@ class TestEncodeTextureBase64:
 # ---------------------------------------------------------------------------
 
 
-class TestMultiMaterialWarning:
+class TestAnisotropy:
+    def test_standard_surface_anisotropy(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "standard_surface",
+            "params": {
+                "base": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                "specular_anisotropy": 0.7,
+                "specular_rotation": 0.25,
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["anisotropy"]["value"] == 0.7
+        # 0.25 × 2π ≈ 1.5708
+        assert props["anisotropyRotation"]["value"] == pytest.approx(
+            0.25 * 2.0 * 3.141592653589793
+        )
+
+    def test_gltf_pbr_anisotropy(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {
+                "anisotropy_strength": 0.5,
+                "anisotropy_rotation": 1.2,
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["anisotropy"]["value"] == 0.5
+        assert props["anisotropyRotation"]["value"] == 1.2
+
+    def test_open_pbr_surface_anisotropy(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                "specular_roughness_anisotropy": 0.6,
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["anisotropy"]["value"] == 0.6
+        assert "anisotropyRotation" not in props
+
+
+class TestOcclusion:
+    def test_gltf_pbr_occlusion_texture(self, tmp_path, tiny_png):
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        ao_tex = tex_dir / "ao.png"
+        ao_tex.write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {},
+            "textures": {"occlusion": {"file": "textures/ao.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "ao" in props
+        assert "texture" in props["ao"]
+
+
+class TestClearcoatNormal:
+    def test_standard_surface_clearcoat_normal(self, tmp_path, tiny_png):
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        cn_tex = tex_dir / "coat_normal.png"
+        cn_tex.write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Test",
+            "shader_model": "standard_surface",
+            "params": {
+                "base": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                "coat": 1.0,
+            },
+            "textures": {"coat_normal": {"file": "textures/coat_normal.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "clearcoatNormal" in props
+        assert "texture" in props["clearcoatNormal"]
+
+    def test_gltf_pbr_clearcoat_normal(self, tmp_path, tiny_png):
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        cn_tex = tex_dir / "clearcoat_normal.png"
+        cn_tex.write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {"clearcoat": 1.0},
+            "textures": {"clearcoat_normal": {"file": "textures/clearcoat_normal.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "clearcoatNormal" in props
+        assert "texture" in props["clearcoatNormal"]
+
+    def test_open_pbr_surface_clearcoat_normal(self, tmp_path, tiny_png):
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        cn_tex = tex_dir / "coat_normal.png"
+        cn_tex.write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Test",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                "coat_weight": 1.0,
+            },
+            "textures": {"geometry_coat_normal": {"file": "textures/coat_normal.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "clearcoatNormal" in props
+        assert "texture" in props["clearcoatNormal"]
+
+
+class TestDisplacement:
+    def test_displacement_extraction(self):
+        """extract_materials() picks up displacement from material node."""
+        xml = make_mtlx_string(
+            "DispMat",
+            "standard_surface",
+            {"base": ("float", "1.0"), "base_color": ("color3", "1, 1, 1")},
+            displacement={"scale": 0.05, "texture_file": "disp.png"},
+        )
+        doc = _load_from_string(xml)
+        mats = extract_materials(doc)
+        assert len(mats) == 1
+        assert "displacement" in mats[0]["textures"]
+        assert mats[0]["textures"]["displacement"]["file"] == "disp.png"
+        assert mats[0]["params"]["displacement_scale"] == pytest.approx(0.05)
+
+    def test_displacement_mapping(self, tmp_path, tiny_png):
+        """to_threejs_physical() maps displacement texture + scale."""
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        disp_tex = tex_dir / "disp.png"
+        disp_tex.write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Test",
+            "shader_model": "standard_surface",
+            "params": {
+                "base": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                "displacement_scale": 0.05,
+            },
+            "textures": {"displacement": {"file": "textures/disp.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "displacement" in props
+        assert "texture" in props["displacement"]
+        assert props["displacementScale"]["value"] == pytest.approx(0.05)
+
+
+
     def test_warning_logged(self, tmp_path, caplog):
         """_process_mtlx should log a warning for multi-material documents."""
         xml = make_mtlx_string(
@@ -544,3 +718,260 @@ class TestMultiMaterialWarning:
 
         assert any("contains 2 materials" in r.message for r in caplog.records)
         assert props  # should still return first material's properties
+
+
+# ---------------------------------------------------------------------------
+# Unknown shader model warning
+# ---------------------------------------------------------------------------
+
+
+class TestUnknownShaderModel:
+    def test_unknown_model_warns(self, tmp_path, caplog):
+        mat = {
+            "name": "Test",
+            "shader_model": "some_unknown_model",
+            "params": {},
+            "textures": {},
+        }
+        with caplog.at_level(logging.WARNING, logger="materialx_db.convert"):
+            props = to_threejs_physical(mat, tmp_path)
+        assert any("Unsupported shader model" in r.message for r in caplog.records)
+
+    def test_unknown_model_still_maps_displacement(self, tmp_path, tiny_png):
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        disp_tex = tex_dir / "disp.png"
+        disp_tex.write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Test",
+            "shader_model": "some_unknown_model",
+            "params": {"displacement_scale": 0.1},
+            "textures": {"displacement": {"file": "textures/disp.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "displacement" in props
+        assert props["displacementScale"]["value"] == pytest.approx(0.1)
+
+
+# ---------------------------------------------------------------------------
+# gltf_pbr: alpha, iridescence, dispersion
+# ---------------------------------------------------------------------------
+
+
+class TestGltfPbrAlpha:
+    def test_alpha_blend_mode(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {"alpha": 0.5, "alpha_mode": 2},
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["opacity"]["value"] == 0.5
+        assert props["transparent"]["value"] is True
+
+    def test_alpha_mask_mode(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {"alpha_mode": 1, "alpha_cutoff": 0.3},
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["alphaTest"]["value"] == 0.3
+        assert "opacity" not in props
+
+    def test_alpha_opaque_mode(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {"alpha": 0.5, "alpha_mode": 0},
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "opacity" not in props
+        assert "transparent" not in props
+
+
+class TestGltfPbrIridescence:
+    def test_iridescence(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {
+                "iridescence": 0.8,
+                "iridescence_ior": 1.4,
+                "iridescence_thickness": 300.0,
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["iridescence"]["value"] == 0.8
+        assert props["iridescenceIOR"]["value"] == 1.4
+        assert props["iridescenceThicknessRange"]["value"] == [0.0, 300.0]
+
+
+class TestGltfPbrDispersion:
+    def test_dispersion(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {"dispersion": 0.3},
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["dispersion"]["value"] == 0.3
+
+
+# ---------------------------------------------------------------------------
+# gltf_pbr: separate metallic/roughness textures
+# ---------------------------------------------------------------------------
+
+
+class TestGltfPbrNormalScale:
+    def test_normal_scale(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {"normal_scale": 0.5},
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["normalScale"]["value"] == [0.5, 0.5]
+
+    def test_normal_scale_default_omitted(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {},
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "normalScale" not in props
+
+
+class TestGltfPbrSeparateTextures:
+    def test_separate_metallic_roughness(self, tmp_path, tiny_png):
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        (tex_dir / "metallic.png").write_bytes(tiny_png.read_bytes())
+        (tex_dir / "roughness.png").write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {"metallic": 0.5, "roughness": 0.5},
+            "textures": {
+                "metallic": {"file": "textures/metallic.png"},
+                "roughness": {"file": "textures/roughness.png"},
+            },
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        # Scalars should be neutral since textures exist
+        assert props["metalness"]["value"] == 1.0
+        assert props["roughness"]["value"] == 1.0
+        assert "texture" in props["metalness"]
+        assert "texture" in props["roughness"]
+        # No packed texture key
+        assert "metallicRoughness" not in props
+
+
+# ---------------------------------------------------------------------------
+# open_pbr_surface: sheen (fuzz)
+# ---------------------------------------------------------------------------
+
+
+class TestOpenPbrGeometryOpacity:
+    def test_geometry_opacity(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                "geometry_opacity": [0.5, 0.5, 0.5],
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["opacity"]["value"] == pytest.approx(0.5)
+        assert props["transparent"]["value"] is True
+
+    def test_geometry_opacity_not_set_with_transmission(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                "transmission_weight": 0.9,
+                "geometry_opacity": [0.5, 0.5, 0.5],
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "opacity" not in props
+
+    def test_geometry_opacity_default_omitted(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "opacity" not in props
+        assert "transparent" not in props
+
+
+class TestOpenPbrThinWalled:
+    def test_thin_walled_double_side(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                "geometry_thin_walled": True,
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["side"]["value"] == 2  # THREE.DoubleSide
+
+    def test_not_thin_walled_no_side(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "side" not in props
+
+
+class TestOpenPbrSheen:
+    def test_fuzz_mapping(self, tmp_path):
+        mat = {
+            "name": "Test",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                "fuzz_weight": 0.6,
+                "fuzz_color": [0.9, 0.8, 0.7],
+                "fuzz_roughness": 0.4,
+            },
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["sheen"]["value"] == 0.6
+        assert props["sheenColor"]["value"] == [0.9, 0.8, 0.7]
+        assert props["sheenRoughness"]["value"] == 0.4
