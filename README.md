@@ -1,17 +1,8 @@
 # materialx-db
 
-A Python library that downloads PBR materials on demand from four open sources and converts them into [Three.js `MeshPhysicalMaterial`](https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial)-compatible JSON with base64-encoded textures.
+A Python library that converts PBR materials into [Three.js `MeshPhysicalMaterial`](https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial)-compatible JSON with base64-encoded textures.
 
-## Sources
-
-| Source                                                   | Type                     | Shader model       |
-| -------------------------------------------------------- | ------------------------ | ------------------ |
-| [ambientCG](https://ambientcg.com/)                      | Texture-based            | `open_pbr_surface` |
-| [GPUOpen MaterialX Library](https://matlib.gpuopen.com/) | Procedural (baked)       | `standard_surface` |
-| [PolyHaven](https://polyhaven.com/)                      | Texture-based            | `standard_surface` |
-| [PhysicallyBased](https://physicallybased.info/)         | Parametric (no textures) | `open_pbr_surface` |
-
-Browse materials on the source websites, then load them by name.
+The primary input format is [MaterialX](https://materialx.org/) — the library can download materials on demand from four open sources and bake procedural graphs into flat textures. For Blender / USD users, `Material.from_usd()` reads `UsdPreviewSurface` materials directly without baking.
 
 <table>
 <tr>
@@ -45,7 +36,155 @@ pip install materialx-db[usd]
 
 This installs `usd-core` for `Material.from_usd()`. Note that `usd-core` may not support the latest Python version.
 
-## API
+## Output format
+
+Both MaterialX and USD pipelines produce the same output format. Each property carries a `value`, a base64-encoded `texture`, or both:
+
+```json
+{
+    "id": "Car Paint",
+    "name": "Car Paint",
+    "source": "gpuopen",
+    "properties": {
+        "color": {
+            "value": [0.944, 0.776, 0.373],
+            "texture": "data:image/png;base64,..."
+        },
+        "metalness": { "value": 1.0 },
+        "roughness": { "value": 0.5, "texture": "data:image/png;base64,..." },
+        "normal": { "texture": "data:image/png;base64,..." },
+        "ior": { "value": 1.5 }
+    }
+}
+```
+
+Parametric materials (PhysicallyBased) have values only:
+
+```json
+{
+    "id": "Gold",
+    "name": "Gold",
+    "source": "physicallybased",
+    "properties": {
+        "color": { "value": [1.059, 0.773, 0.307] },
+        "metalness": { "value": 1.0 },
+        "roughness": { "value": 0.0 },
+        "ior": { "value": 1.5 }
+    }
+}
+```
+
+### Property name mapping
+
+Each output property maps to Three.js `MeshPhysicalMaterial` fields:
+
+| Output property | `value` → | `texture` → |
+| --- | --- | --- |
+| `color` | `color` | `map` |
+| `metalness` | `metalness` | `metalnessMap` |
+| `roughness` | `roughness` | `roughnessMap` |
+| `normal` | — | `normalMap` |
+| `normalScale` | `normalScale` | — |
+| `ao` | — | `aoMap` |
+| `emissive` | `emissive` | `emissiveMap` |
+| `emissiveIntensity` | `emissiveIntensity` | — |
+| `ior` | `ior` | — |
+| `transmission` | `transmission` | `transmissionMap` |
+| `thickness` | `thickness` | `thicknessMap` |
+| `attenuationColor` | `attenuationColor` | — |
+| `attenuationDistance` | `attenuationDistance` | — |
+| `clearcoat` | `clearcoat` | `clearcoatMap` |
+| `clearcoatRoughness` | `clearcoatRoughness` | — |
+| `clearcoatNormal` | — | `clearcoatNormalMap` |
+| `sheen` | `sheen` | — |
+| `sheenColor` | `sheenColor` | `sheenColorMap` |
+| `sheenRoughness` | `sheenRoughness` | — |
+| `iridescence` | `iridescence` | `iridescenceMap` |
+| `iridescenceIOR` | `iridescenceIOR` | — |
+| `iridescenceThicknessRange` | `iridescenceThicknessRange` | — |
+| `anisotropy` | `anisotropy` | — |
+| `anisotropyRotation` | `anisotropyRotation` | — |
+| `specularIntensity` | `specularIntensity` | `specularIntensityMap` |
+| `specularColor` | `specularColor` | `specularColorMap` |
+| `opacity` | `opacity` | `alphaMap` |
+| `transparent` | `transparent` | — |
+| `alphaTest` | `alphaTest` | — |
+| `dispersion` | `dispersion` | — |
+| `displacement` | — | `displacementMap` |
+| `displacementScale` | `displacementScale` | — |
+| `side` | `side` | — |
+| `metallicRoughness` | — | `metalnessMap` + `roughnessMap` (G=roughness, B=metalness) |
+
+## Common API
+
+### `encode_texture_base64(file_path) -> str`
+
+Encode an image file as a base64 data URI. Automatically converts EXR to PNG.
+
+```python
+from materialx_db import encode_texture_base64
+
+data_uri = encode_texture_base64("textures/normal.png")
+# -> 'data:image/png;base64,iVBORw0KGgo...'
+```
+
+### `material.interpolate_color() -> (r, g, b, a)`
+
+Estimate a single representative sRGB color from a material — useful for CAD viewers that need a flat color per object while keeping a material dictionary for full PBR rendering.
+
+```python
+from materialx_db import Material
+
+wood = Material.gpuopen.load("Ivory Walnut Solid Wood")
+
+materials = {"wood": wood}      # keep for full PBR rendering
+object.material = "wood"
+object.color = wood.interpolate_color()   # (0.53, 0.31, 0.18, 1.0)
+```
+
+When the material has a color texture, the texture is decoded and averaged (requires `Pillow`). Scalar colors (linear RGB) are converted to sRGB. Transmission and opacity are mapped to the alpha channel so glass-like materials appear semi-transparent.
+
+### Three.js usage
+
+```javascript
+const data = JSON.parse(jsonStr);
+const material = new THREE.MeshPhysicalMaterial();
+
+for (const [key, prop] of Object.entries(data.properties)) {
+    if (prop.texture) {
+        material[key] = new THREE.TextureLoader().load(prop.texture);
+    }
+    if (prop.value !== undefined) {
+        if (Array.isArray(prop.value) && prop.value.length === 3) {
+            material[key] = new THREE.Color(...prop.value);
+        } else {
+            material[key] = prop.value;
+        }
+    }
+}
+```
+
+### Consumer notes
+
+- **Color space**: Textures include a `colorSpace` field when available. Three.js expects color textures (baseColor, emissive, sheenColor, specularColor) in **sRGB** and data textures (roughness, metalness, normal, AO, displacement) in **linear**. Set `texture.colorSpace` accordingly.
+- **Normal maps**: Baked using the OpenGL convention (Y-up), matching Three.js and glTF expectations.
+- **Scalar x texture**: When both `value` and `texture` are present, Three.js multiplies them. The library sets scalars to `1.0` (neutral) when a texture is present so the texture controls fully.
+- **glTF packed metallicRoughness**: When present, the `metallicRoughness` property carries a single packed texture (G=roughness, B=metalness). The consumer must assign it to both `metalnessMap` and `roughnessMap`.
+
+---
+
+## MaterialX
+
+### Sources
+
+| Source                                                   | Type                     | Shader model       |
+| -------------------------------------------------------- | ------------------------ | ------------------ |
+| [ambientCG](https://ambientcg.com/)                      | Texture-based            | `open_pbr_surface` |
+| [GPUOpen MaterialX Library](https://matlib.gpuopen.com/) | Procedural (baked)       | `standard_surface` |
+| [PolyHaven](https://polyhaven.com/)                      | Texture-based            | `standard_surface` |
+| [PhysicallyBased](https://physicallybased.info/)         | Parametric (no textures) | `open_pbr_surface` |
+
+Browse materials on the source websites, then load them by name.
 
 ### `Material.{source}.load(name, resolution="1K") -> Material`
 
@@ -102,127 +241,18 @@ mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
 
 Texture paths in the `.mtlx` are resolved relative to the file's location.
 
-### `Material.from_usd(usd_file) -> Material`
+### Conversion pipeline
 
-Load a USD file (`.usda`, `.usdc`, `.usdz`) with `UsdPreviewSurface` materials.
+When a material is loaded:
 
-```python
-from materialx_db import Material
+1. **Download** — source-specific: fetch ZIP (ambientCG, GPUOpen), individual files (PolyHaven), or generate from parameters (PhysicallyBased)
+2. **Bake** — run MaterialX `TextureBaker` (GLSL preferred, MSL fallback on macOS) to flatten procedural graphs into texture images
+3. **Fallback merge** — if the baker can't handle certain textures, merge from the original document
+4. **EXR to PNG** — convert any EXR textures to 8-bit PNG
+5. **Extract** — map shader inputs to `MeshPhysicalMaterial` properties with base64-encoded textures
+6. **Cache** — write JSON to `~/.materialx-cache/`
 
-mat = Material.from_usd("model.usda")
-```
-
-Textures are resolved relative to the file location. USDZ archives with embedded textures are supported.
-
-UsdPreviewSurface inputs are mapped to Three.js properties: `diffuseColor` → `color`, `metallic` → `metalness`, `roughness`, `normal`, `emissiveColor` → `emissive`, `clearcoat`, `clearcoatRoughness`, `ior`, `occlusion` → `ao`, `displacement`, `opacity`, `opacityThreshold` → `alphaTest`, `specularColor`. Both metallic and specular workflows are supported.
-
-### `encode_texture_base64(file_path) -> str`
-
-Encode an image file as a base64 data URI. Automatically converts EXR to PNG.
-
-```python
-from materialx_db import encode_texture_base64
-
-data_uri = encode_texture_base64("textures/normal.png")
-# -> 'data:image/png;base64,iVBORw0KGgo...'
-```
-
-### `material.interpolate_color() -> (r, g, b, a)`
-
-Estimate a single representative sRGB color from a material — useful for CAD viewers that need a flat color per object while keeping a material dictionary for full PBR rendering.
-
-```python
-from materialx_db import Material
-
-wood = Material.gpuopen.load("Ivory Walnut Solid Wood")
-
-materials = {"wood": wood}      # keep for full PBR rendering
-object.material = "wood"
-object.color = wood.interpolate_color()   # (0.53, 0.31, 0.18, 1.0)
-```
-
-When the material has a color texture, the texture is decoded and averaged (requires `Pillow`). Scalar colors (linear RGB) are converted to sRGB. Transmission and opacity are mapped to the alpha channel so glass-like materials appear semi-transparent.
-
-## Output format
-
-Each property carries a `value`, a base64-encoded `texture`, or both:
-
-```json
-{
-    "id": "Car Paint",
-    "name": "Car Paint",
-    "source": "gpuopen",
-    "properties": {
-        "color": {
-            "value": [0.944, 0.776, 0.373],
-            "texture": "data:image/png;base64,..."
-        },
-        "metalness": { "value": 1.0 },
-        "roughness": { "value": 0.5, "texture": "data:image/png;base64,..." },
-        "normal": { "texture": "data:image/png;base64,..." },
-        "ior": { "value": 1.5 }
-    }
-}
-```
-
-### Property name mapping
-
-Each output property maps to Three.js `MeshPhysicalMaterial` fields:
-
-| Output property | `value` → | `texture` → |
-| --- | --- | --- |
-| `color` | `color` | `map` |
-| `metalness` | `metalness` | `metalnessMap` |
-| `roughness` | `roughness` | `roughnessMap` |
-| `normal` | — | `normalMap` |
-| `normalScale` | `normalScale` | — |
-| `ao` | — | `aoMap` |
-| `emissive` | `emissive` | `emissiveMap` |
-| `emissiveIntensity` | `emissiveIntensity` | — |
-| `ior` | `ior` | — |
-| `transmission` | `transmission` | `transmissionMap` |
-| `thickness` | `thickness` | `thicknessMap` |
-| `attenuationColor` | `attenuationColor` | — |
-| `attenuationDistance` | `attenuationDistance` | — |
-| `clearcoat` | `clearcoat` | `clearcoatMap` |
-| `clearcoatRoughness` | `clearcoatRoughness` | — |
-| `clearcoatNormal` | — | `clearcoatNormalMap` |
-| `sheen` | `sheen` | — |
-| `sheenColor` | `sheenColor` | `sheenColorMap` |
-| `sheenRoughness` | `sheenRoughness` | — |
-| `iridescence` | `iridescence` | `iridescenceMap` |
-| `iridescenceIOR` | `iridescenceIOR` | — |
-| `iridescenceThicknessRange` | `iridescenceThicknessRange` | — |
-| `anisotropy` | `anisotropy` | — |
-| `anisotropyRotation` | `anisotropyRotation` | — |
-| `specularIntensity` | `specularIntensity` | `specularIntensityMap` |
-| `specularColor` | `specularColor` | `specularColorMap` |
-| `opacity` | `opacity` | `alphaMap` |
-| `transparent` | `transparent` | — |
-| `alphaTest` | `alphaTest` | — |
-| `dispersion` | `dispersion` | — |
-| `displacement` | — | `displacementMap` |
-| `displacementScale` | `displacementScale` | — |
-| `side` | `side` | — |
-| `metallicRoughness` | — | `metalnessMap` + `roughnessMap` (G=roughness, B=metalness) |
-
-Parametric materials (PhysicallyBased) have values only:
-
-```json
-{
-    "id": "Gold",
-    "name": "Gold",
-    "source": "physicallybased",
-    "properties": {
-        "color": { "value": [1.059, 0.773, 0.307] },
-        "metalness": { "value": 1.0 },
-        "roughness": { "value": 0.0 },
-        "ior": { "value": 1.5 }
-    }
-}
-```
-
-## Cache
+### Cache
 
 Converted materials are cached as flat JSON files in `~/.materialx-cache/`:
 
@@ -236,46 +266,7 @@ Converted materials are cached as flat JSON files in `~/.materialx-cache/`:
 
 To force re-conversion, delete the cached file and call `.load()` again.
 
-## Conversion pipeline
-
-When a material is loaded:
-
-1. **Download** — source-specific: fetch ZIP (ambientCG, GPUOpen), individual files (PolyHaven), or generate from parameters (PhysicallyBased)
-2. **Bake** — run MaterialX `TextureBaker` (GLSL preferred, MSL fallback on macOS) to flatten procedural graphs into texture images
-3. **Fallback merge** — if the baker can't handle certain textures, merge from the original document
-4. **EXR to PNG** — convert any EXR textures to 8-bit PNG
-5. **Extract** — map shader inputs to `MeshPhysicalMaterial` properties with base64-encoded textures
-6. **Cache** — write JSON to `~/.materialx-cache/`
-
-## Three.js usage
-
-```javascript
-const data = JSON.parse(jsonStr);
-const material = new THREE.MeshPhysicalMaterial();
-
-for (const [key, prop] of Object.entries(data.properties)) {
-    if (prop.texture) {
-        material[key] = new THREE.TextureLoader().load(prop.texture);
-    }
-    if (prop.value !== undefined) {
-        if (Array.isArray(prop.value) && prop.value.length === 3) {
-            material[key] = new THREE.Color(...prop.value);
-        } else {
-            material[key] = prop.value;
-        }
-    }
-}
-```
-
-### Consumer notes
-
-- **Color space**: Textures include a `colorSpace` field when available. Three.js expects color textures (baseColor, emissive, sheenColor, specularColor) in **sRGB** and data textures (roughness, metalness, normal, AO, displacement) in **linear**. Set `texture.colorSpace` accordingly.
-- **Normal maps**: Baked using the OpenGL convention (Y-up), matching Three.js and glTF expectations.
-- **Scalar x texture**: When both `value` and `texture` are present, Three.js multiplies them. The library sets scalars to `1.0` (neutral) when a texture is present so the texture controls fully.
-- **glTF packed metallicRoughness**: When present, the `metallicRoughness` property carries a single packed texture (G=roughness, B=metalness). The consumer must assign it to both `metalnessMap` and `roughnessMap`.
-- **Emission intensity**: For `open_pbr_surface`, `emission_luminance` (in nits) is scaled by `/1000` for `emissiveIntensity` to produce reasonable brightness in typical non-HDR Three.js scenes. This is a pragmatic normalization, not physically exact.
-
-## Shader model coverage
+### Shader model coverage
 
 Supported models: `standard_surface`, `gltf_pbr`, `open_pbr_surface`. Other models produce empty output with a logged warning.
 
@@ -302,35 +293,79 @@ Supported models: `standard_surface`, `gltf_pbr`, `open_pbr_surface`. Other mode
 
 Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no SSS support.
 
-## Limitations
+### MaterialX limitations
 
-### Materials
+#### Materials
 
 - **Single material per document** — only the first material is used when a `.mtlx` file contains multiple materials. A warning is logged.
 - **First shader node** — if a material has multiple shader nodes (e.g. surface + volume), only the first surface shader is extracted.
 
-### Baking
+#### Baking
 
 - **8-bit textures** — the TextureBaker uses `UINT8` output. HDR information (emissive, HDR environment lighting baked into textures) is clamped to [0,1]. This is acceptable for web preview but lossy for physically accurate emissive maps.
 - **Global bake lock** — baking operations are serialized via a `threading.Lock` because the MaterialX baker requires `os.chdir`. This is thread-safe but becomes a bottleneck under concurrent load. The lock is per-process only (`threading.Lock`, not `multiprocessing.Lock`).
 - **Geometry-dependent nodes** — procedurals driven by `<position>`, `<normal>`, or `<tangent>` cannot be baked (the baker renders on a flat UV quad with no 3D geometry).
 
-### Image tracing
+#### Image tracing
 
 - **Single upstream image** — `find_upstream_image` returns the first image node found when walking upstream. Complex graphs with multiple images (layered blends, channel packing before baking) will only capture one image. After baking, this is fine since the baker flattens everything to single `<image>` nodes.
 - **No channel extraction tracking** — when an image passes through `extract` or `swizzle` nodes, the specific channel being used is not recorded. The consumer must know glTF metallicRoughness packing conventions (G=roughness, B=metalness).
 
-### EXR conversion
+#### EXR conversion
 
 - **LDR clamp** — EXR textures are clamped to [0,1] and converted to 8-bit PNG. Dynamic range beyond 1.0 is lost.
 - **Channel naming** — EXR files with non-standard channel names (not R/G/B/A) fall back to source-order channel selection, which may produce incorrect color mappings for unusual EXR layouts.
 
-### Network
+#### Network
 
 - **No retry logic** — a single network failure raises an exception. The caller is responsible for retries.
 - **GPUOpen pagination** — the material search assumes all results fit in one API page. Materials not in the first page may not be found.
 - **GPUOpen sequential package lookup** — each package UUID is queried individually; materials with many packages may be slow to resolve.
 
-### Caching
+#### Caching
 
 - **No cache invalidation** — cached materials are never automatically refreshed. Delete the cache file manually to force re-conversion.
+
+---
+
+## USD
+
+For Blender users and other USD workflows: `Material.from_usd()` reads `UsdPreviewSurface` materials directly from USD files. No MaterialX baking is needed since UsdPreviewSurface is already a flat PBR shader.
+
+### `Material.from_usd(usd_file) -> Material`
+
+Load a USD file (`.usda`, `.usdc`, `.usdz`) with `UsdPreviewSurface` materials.
+
+```python
+from materialx_db import Material
+
+mat = Material.from_usd("model.usda")
+```
+
+Textures are resolved relative to the file location. USDZ archives with embedded textures are supported. Both metallic and specular workflows are handled (`useSpecularWorkflow` input).
+
+### UsdPreviewSurface input mapping
+
+| UsdPreviewSurface input | Output property | Notes |
+| --- | --- | --- |
+| `diffuseColor` | `color` | value + texture |
+| `metallic` | `metalness` | value + texture |
+| `roughness` | `roughness` | value + texture |
+| `normal` | `normal` | texture only |
+| `emissiveColor` | `emissive` | value + texture |
+| `clearcoat` | `clearcoat` | value only |
+| `clearcoatRoughness` | `clearcoatRoughness` | value only |
+| `ior` | `ior` | value only |
+| `occlusion` | `ao` | texture only |
+| `displacement` | `displacement` | texture only |
+| `opacity` | `opacity` | + `transparent: true` if < 1 |
+| `opacityThreshold` | `alphaTest` | mask/cutout mode |
+| `specularColor` | `specularColor` | only if `useSpecularWorkflow == 1` |
+
+Inputs at their UsdPreviewSurface default value are omitted from the output.
+
+### USD limitations
+
+- **Single material per file** — only the first `UsdPreviewSurface` material is used when a file contains multiple materials. A warning is logged.
+- **No UV transform support** — `UsdTransform2d` nodes are not read; texture coordinates are assumed to be used as-is.
+- **Emission intensity** — UsdPreviewSurface has no emission intensity input; `emissiveColor` maps directly to `emissive`.
