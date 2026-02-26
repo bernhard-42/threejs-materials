@@ -116,6 +116,47 @@ Each property carries a `value`, a base64-encoded `texture`, or both:
 }
 ```
 
+### Property name mapping
+
+Each output property maps to Three.js `MeshPhysicalMaterial` fields:
+
+| Output property | `value` → | `texture` → |
+| --- | --- | --- |
+| `color` | `color` | `map` |
+| `metalness` | `metalness` | `metalnessMap` |
+| `roughness` | `roughness` | `roughnessMap` |
+| `normal` | — | `normalMap` |
+| `normalScale` | `normalScale` | — |
+| `ao` | — | `aoMap` |
+| `emissive` | `emissive` | `emissiveMap` |
+| `emissiveIntensity` | `emissiveIntensity` | — |
+| `ior` | `ior` | — |
+| `transmission` | `transmission` | `transmissionMap` |
+| `thickness` | `thickness` | `thicknessMap` |
+| `attenuationColor` | `attenuationColor` | — |
+| `attenuationDistance` | `attenuationDistance` | — |
+| `clearcoat` | `clearcoat` | `clearcoatMap` |
+| `clearcoatRoughness` | `clearcoatRoughness` | — |
+| `clearcoatNormal` | — | `clearcoatNormalMap` |
+| `sheen` | `sheen` | — |
+| `sheenColor` | `sheenColor` | `sheenColorMap` |
+| `sheenRoughness` | `sheenRoughness` | — |
+| `iridescence` | `iridescence` | `iridescenceMap` |
+| `iridescenceIOR` | `iridescenceIOR` | — |
+| `iridescenceThicknessRange` | `iridescenceThicknessRange` | — |
+| `anisotropy` | `anisotropy` | — |
+| `anisotropyRotation` | `anisotropyRotation` | — |
+| `specularIntensity` | `specularIntensity` | `specularIntensityMap` |
+| `specularColor` | `specularColor` | `specularColorMap` |
+| `opacity` | `opacity` | `alphaMap` |
+| `transparent` | `transparent` | — |
+| `alphaTest` | `alphaTest` | — |
+| `dispersion` | `dispersion` | — |
+| `displacement` | — | `displacementMap` |
+| `displacementScale` | `displacementScale` | — |
+| `side` | `side` | — |
+| `metallicRoughness` | — | `metalnessMap` + `roughnessMap` (G=roughness, B=metalness) |
+
 Parametric materials (PhysicallyBased) have values only:
 
 ```json
@@ -176,3 +217,71 @@ for (const [key, prop] of Object.entries(data.properties)) {
     }
 }
 ```
+
+### Consumer notes
+
+- **Color space**: Textures include a `colorSpace` field when available. Three.js expects color textures (baseColor, emissive, sheenColor, specularColor) in **sRGB** and data textures (roughness, metalness, normal, AO, displacement) in **linear**. Set `texture.colorSpace` accordingly.
+- **Normal maps**: Baked using the OpenGL convention (Y-up), matching Three.js and glTF expectations.
+- **Scalar x texture**: When both `value` and `texture` are present, Three.js multiplies them. The library sets scalars to `1.0` (neutral) when a texture is present so the texture controls fully.
+- **glTF packed metallicRoughness**: When present, the `metallicRoughness` property carries a single packed texture (G=roughness, B=metalness). The consumer must assign it to both `metalnessMap` and `roughnessMap`.
+- **Emission intensity**: For `open_pbr_surface`, `emission_luminance` (in nits) is scaled by `/1000` for `emissiveIntensity` to produce reasonable brightness in typical non-HDR Three.js scenes. This is a pragmatic normalization, not physically exact.
+
+## Shader model coverage
+
+Supported models: `standard_surface`, `gltf_pbr`, `open_pbr_surface`. Other models produce empty output with a logged warning.
+
+| Feature | standard_surface | gltf_pbr | open_pbr_surface |
+| --- | --- | --- | --- |
+| Base color | Yes | Yes | Yes |
+| Metalness | Yes | Yes | Yes |
+| Roughness | Yes | Yes | Yes |
+| Normal map | Yes | Yes | Yes |
+| Specular | Yes (weight, color, IOR) | Yes (weight, color, IOR) | Yes (weight, color, IOR) |
+| Transmission | Yes | Yes (+ attenuation) | Yes (+ attenuation) |
+| Emission | Yes | Yes | Yes |
+| Clearcoat | Yes | Yes | Yes |
+| Clearcoat normal | Yes | Yes | Yes |
+| Sheen | Yes | Yes | Yes (fuzz) |
+| Iridescence | Yes | Yes | Yes |
+| Anisotropy | Yes (scalar — no Three.js strength map) | Yes | Yes |
+| Opacity | Yes | Yes (alpha/alpha_mode) | Yes (geometry_opacity) |
+| Displacement | Yes (model-independent) | Yes | Yes |
+| Dispersion | No | Yes | Yes |
+| Normal scale | No (baked into texture) | Yes | No (baked into texture) |
+| Thin-walled | No | No | Yes (→ DoubleSide) |
+| Subsurface | No | No | No |
+
+Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no SSS support.
+
+## Limitations
+
+### Materials
+
+- **Single material per document** — only the first material is used when a `.mtlx` file contains multiple materials. A warning is logged.
+- **First shader node** — if a material has multiple shader nodes (e.g. surface + volume), only the first surface shader is extracted.
+
+### Baking
+
+- **8-bit textures** — the TextureBaker uses `UINT8` output. HDR information (emissive, HDR environment lighting baked into textures) is clamped to [0,1]. This is acceptable for web preview but lossy for physically accurate emissive maps.
+- **Global bake lock** — baking operations are serialized via a `threading.Lock` because the MaterialX baker requires `os.chdir`. This is thread-safe but becomes a bottleneck under concurrent load. The lock is per-process only (`threading.Lock`, not `multiprocessing.Lock`).
+- **Geometry-dependent nodes** — procedurals driven by `<position>`, `<normal>`, or `<tangent>` cannot be baked (the baker renders on a flat UV quad with no 3D geometry).
+
+### Image tracing
+
+- **Single upstream image** — `find_upstream_image` returns the first image node found when walking upstream. Complex graphs with multiple images (layered blends, channel packing before baking) will only capture one image. After baking, this is fine since the baker flattens everything to single `<image>` nodes.
+- **No channel extraction tracking** — when an image passes through `extract` or `swizzle` nodes, the specific channel being used is not recorded. The consumer must know glTF metallicRoughness packing conventions (G=roughness, B=metalness).
+
+### EXR conversion
+
+- **LDR clamp** — EXR textures are clamped to [0,1] and converted to 8-bit PNG. Dynamic range beyond 1.0 is lost.
+- **Channel naming** — EXR files with non-standard channel names (not R/G/B/A) fall back to source-order channel selection, which may produce incorrect color mappings for unusual EXR layouts.
+
+### Network
+
+- **No retry logic** — a single network failure raises an exception. The caller is responsible for retries.
+- **GPUOpen pagination** — the material search assumes all results fit in one API page. Materials not in the first page may not be found.
+- **GPUOpen sequential package lookup** — each package UUID is queried individually; materials with many packages may be slow to resolve.
+
+### Caching
+
+- **No cache invalidation** — cached materials are never automatically refreshed. Delete the cache file manually to force re-conversion.
