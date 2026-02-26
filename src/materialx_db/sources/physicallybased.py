@@ -188,7 +188,13 @@ def _generate_mtlx(mat: dict, out_dir: Path) -> Path:
     if subsurface_radius:
         _set_input(shader_node, "subsurface_weight", "float", 1.0)
         _set_input(shader_node, "subsurface_color", "color3", color)
-        _set_input(shader_node, "subsurface_radius_scale", "color3", subsurface_radius)
+        # subsurface_radius_scale is a float in OpenPBR; use the average
+        # of the RGB radius values from the API as a scalar approximation.
+        if isinstance(subsurface_radius, list):
+            avg_radius = sum(subsurface_radius) / len(subsurface_radius)
+        else:
+            avg_radius = float(subsurface_radius)
+        _set_input(shader_node, "subsurface_radius_scale", "float", avg_radius)
 
     # thin film
     tf_thickness = mat.get("thinFilmThickness")

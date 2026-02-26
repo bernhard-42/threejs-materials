@@ -1,5 +1,6 @@
 """Public API: load materials on demand with local JSON caching."""
 
+import copy
 import json
 import logging
 import re
@@ -90,7 +91,7 @@ class Material:
     """A loaded PBR material with Three.js MeshPhysicalMaterial properties."""
 
     __slots__ = ("id", "name", "source", "url", "license", "properties",
-                 "color_override", "texture_repeat")
+                 "texture_repeat")
 
     ambientcg = _SourceLoader(MaterialSource.ambientCG, "ambientcg")
     gpuopen = _SourceLoader(MaterialSource.GPUOpen, "gpuopen")
@@ -104,7 +105,6 @@ class Material:
         self.url: str = data["url"]
         self.license: str = data["license"]
         self.properties: dict = data["properties"]
-        self.color_override: tuple | None = data.get("color_override")
         self.texture_repeat: tuple | None = data.get("texture_repeat")
 
     @classmethod
@@ -285,18 +285,28 @@ class Material:
             "properties": properties,
         })
 
-    def override(self, color=None, repeat=None) -> "Material":
-        """Return a new Material with color and/or texture repeat overrides.
+    def override(self, *, repeat=None, **props) -> "Material":
+        """Return a new Material with property and/or texture repeat overrides.
+
+        Keyword arguments correspond to property names in ``properties``
+        (e.g. ``color``, ``roughness``, ``metalness``).  Each sets the
+        ``value`` of that property, creating it if absent.
 
         Parameters
         ----------
-        color : tuple[float, float, float], optional
-            Linear RGB color override, e.g. ``(0.8, 0.1, 0.2)``.
         repeat : tuple[float, float], optional
             Texture tiling ``(u, v)``, e.g. ``(3, 3)``.
+        **props
+            Property overrides, e.g. ``color=(0.8, 0.1, 0.2)``,
+            ``roughness=0.9``.
         """
+        new_props = copy.deepcopy(self.properties)
+        for key, value in props.items():
+            if isinstance(value, tuple):
+                value = list(value)
+            new_props.setdefault(key, {})["value"] = value
         data = self.to_dict()
-        data["color_override"] = tuple(color) if color is not None else self.color_override
+        data["properties"] = new_props
         data["texture_repeat"] = tuple(repeat) if repeat is not None else self.texture_repeat
         return Material(data)
 
@@ -310,8 +320,6 @@ class Material:
             "license": self.license,
             "properties": self.properties,
         }
-        if self.color_override is not None:
-            d["colorOverride"] = list(self.color_override)
         if self.texture_repeat is not None:
             d["textureRepeat"] = list(self.texture_repeat)
         return d

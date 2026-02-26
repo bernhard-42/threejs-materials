@@ -215,6 +215,22 @@ def extract_materials(doc) -> list[dict]:
                 if val_str:
                     mat_info["params"][inp_name] = parse_value(val_str, inp_type)
 
+        # Check for displacement shader on the material node
+        disp_input = mat_node.getInput("displacementshader")
+        if disp_input:
+            disp_node = disp_input.getConnectedNode()
+            if disp_node and disp_node.getCategory() == "displacement":
+                disp_inp = disp_node.getInput("displacement")
+                if disp_inp:
+                    img_info = find_upstream_image(disp_inp)
+                    if img_info and "file" in img_info:
+                        mat_info["textures"]["displacement"] = img_info
+                scale_inp = disp_node.getInput("scale")
+                if scale_inp:
+                    scale_str = scale_inp.getValueString()
+                    if scale_str:
+                        mat_info["params"]["displacement_scale"] = float(scale_str)
+
         materials.append(mat_info)
     return materials
 
@@ -270,23 +286,36 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         tex("normal", "normal")
 
         val("specularIntensity", p.get("specular", 1.0))
+        tex("specularIntensity", "specular")
         val("specularColor", p.get("specular_color", [1.0, 1.0, 1.0]))
+        tex("specularColor", "specular_color")
         val("ior", p.get("specular_IOR", 1.5))
 
         transmission = p.get("transmission", 0.0)
         if transmission > 0.0:
             val("transmission", transmission)
-            val("transparent", True)
+            tex("transmission", "transmission")
+            # Do NOT set transparent=True here.  Three.js renders transmissive
+            # objects in a dedicated pass; setting transparent moves them to the
+            # wrong (transparent) pass and breaks physically-correct refraction.
+
+        aniso = p.get("specular_anisotropy", 0.0)
+        if aniso > 0.0:
+            val("anisotropy", aniso)
+            val("anisotropyRotation", p.get("specular_rotation", 0.0) * 2.0 * 3.141592653589793)
 
         coat = p.get("coat", 0.0)
         if coat > 0.0:
             val("clearcoat", coat)
+            tex("clearcoat", "coat")
             val("clearcoatRoughness", p.get("coat_roughness", 0.1))
+            tex("clearcoatNormal", "coat_normal")
 
         sheen = p.get("sheen", 0.0)
         if sheen > 0.0:
             val("sheen", sheen)
             val("sheenColor", p.get("sheen_color", [1.0, 1.0, 1.0]))
+            tex("sheenColor", "sheen_color")
             val("sheenRoughness", p.get("sheen_roughness", 0.3))
 
         emission = p.get("emission", 0.0)
@@ -303,9 +332,11 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         tf_thickness = p.get("thin_film_thickness", 0.0)
         if tf_thickness > 0.0:
             val("iridescence", 1.0)
+            tex("iridescence", "thin_film_weight")
             val("iridescenceIOR", p.get("thin_film_IOR", 1.5))
-            # thin_film_thickness is in μm; Three.js expects nm
-            val("iridescenceThicknessRange", [0.0, tf_thickness * 1000.0])
+            # standard_surface thin_film_thickness is already in nm;
+            # Three.js iridescenceThicknessRange also expects nm.
+            val("iridescenceThicknessRange", [0.0, tf_thickness])
 
         # Only apply opacity when transmission is not active
         # (transmission subsumes opacity; combining them causes double attenuation)
@@ -326,12 +357,15 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         tex("color", "base_color")
 
         has_mr_tex = has_tex("metallic_roughness")
-        val("metalness", 1.0 if has_mr_tex else p.get("metallic", 0.0))
-        val("roughness", 1.0 if has_mr_tex else p.get("roughness", 1.0))
+        has_separate_m = has_tex("metallic")
+        has_separate_r = has_tex("roughness")
+        val("metalness", 1.0 if (has_mr_tex or has_separate_m) else p.get("metallic", 0.0))
+        val("roughness", 1.0 if (has_mr_tex or has_separate_r) else p.get("roughness", 1.0))
         val("ior", p.get("ior", 1.5))
 
         transmission = p.get("transmission", 0.0)
         val("transmission", transmission)
+        tex("transmission", "transmission")
         if transmission > 0.0:
             att_color = p.get("attenuation_color")
             if att_color:
@@ -342,22 +376,47 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             thickness = p.get("thickness")
             if thickness and thickness > 0.0:
                 val("thickness", thickness)
+            tex("thickness", "thickness")
 
         # glTF metallic-roughness is a packed texture (G=roughness, B=metalness).
         # Encode once under a dedicated key; consumer assigns to both maps.
         if has_mr_tex:
             tex("metallicRoughness", "metallic_roughness")
+            if "metallicRoughness" in props:
+                props["metallicRoughness"]["channelMapping"] = {
+                    "roughness": "g",
+                    "metalness": "b",
+                }
+
+        # The baker may output separate textures per input instead of a
+        # packed metallic_roughness texture.  Map them individually.
+        if not has_mr_tex:
+            tex("metalness", "metallic")
+            tex("roughness", "roughness")
 
         tex("normal", "normal")
+        normal_scale = p.get("normal_scale", 1.0)
+        if normal_scale != 1.0:
+            val("normalScale", [normal_scale, normal_scale])
+
+        tex("ao", "occlusion")
+
+        aniso = p.get("anisotropy_strength", 0.0)
+        if aniso > 0.0:
+            val("anisotropy", aniso)
+            val("anisotropyRotation", p.get("anisotropy_rotation", 0.0))
 
         clearcoat = p.get("clearcoat", 0.0)
         if clearcoat > 0.0:
             val("clearcoat", clearcoat)
+            tex("clearcoat", "clearcoat")
             val("clearcoatRoughness", p.get("clearcoat_roughness", 0.0))
+            tex("clearcoatNormal", "clearcoat_normal")
 
         sheen_color = p.get("sheen_color")
         if sheen_color:
             val("sheenColor", sheen_color)
+            tex("sheenColor", "sheen_color")
             val("sheenRoughness", p.get("sheen_roughness", 0.0))
             val("sheen", 1.0)
 
@@ -366,6 +425,34 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             val("emissive", emissive)
             val("emissiveIntensity", p.get("emissive_strength", 1.0))
             tex("emissive", "emissive")
+
+        # glTF alpha / opacity
+        alpha = p.get("alpha", 1.0)
+        alpha_mode = p.get("alpha_mode", 0)  # 0=OPAQUE, 1=MASK, 2=BLEND
+        if alpha_mode == 2:
+            # BLEND mode → standard opacity
+            if alpha < 1.0:
+                val("opacity", alpha)
+                val("transparent", True)
+            tex("opacity", "alpha")
+        elif alpha_mode == 1:
+            # MASK mode → alphaTest
+            val("alphaTest", p.get("alpha_cutoff", 0.5))
+
+        # glTF iridescence (KHR_materials_iridescence)
+        iridescence = p.get("iridescence", 0.0)
+        if iridescence > 0.0:
+            val("iridescence", iridescence)
+            tex("iridescence", "iridescence")
+            val("iridescenceIOR", p.get("iridescence_ior", 1.3))
+            # iridescence_thickness is in nm; Three.js also expects nm
+            iri_thick = p.get("iridescence_thickness", 100.0)
+            val("iridescenceThicknessRange", [0.0, iri_thick])
+
+        # glTF dispersion (KHR_materials_dispersion)
+        dispersion = p.get("dispersion", 0.0)
+        if dispersion > 0.0:
+            val("dispersion", dispersion)
 
     elif model == "open_pbr_surface":
         # Three.js multiplies scalar × texture — set to neutral when texture exists.
@@ -387,8 +474,10 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         spec_color = p.get("specular_color")
         if spec_color or spec_weight != 1.0:
             val("specularIntensity", spec_weight)
+            tex("specularIntensity", "specular_weight")
             if spec_color:
                 val("specularColor", spec_color)
+            tex("specularColor", "specular_color")
 
         tex("normal", "geometry_normal")
 
@@ -397,7 +486,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         transmission = p.get("transmission_weight", 0.0)
         if transmission > 0.0:
             val("transmission", transmission)
-            val("transparent", True)
+            tex("transmission", "transmission_weight")
+            # Do NOT set transparent=True — see standard_surface comment above.
             tx_color = p.get("transmission_color")
             if tx_color:
                 val("attenuationColor", tx_color)
@@ -410,25 +500,67 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         if abbe and abbe > 0:
             val("dispersion", 20.0 / abbe)
 
+        aniso = p.get("specular_roughness_anisotropy", 0.0)
+        if aniso > 0.0:
+            val("anisotropy", aniso)
+
         coat = p.get("coat_weight", 0.0)
         if coat > 0.0:
             val("clearcoat", coat)
+            tex("clearcoat", "coat_weight")
             val("clearcoatRoughness", p.get("coat_roughness", 0.0))
+            tex("clearcoatNormal", "geometry_coat_normal")
+
+        # OpenPBR fuzz → Three.js sheen
+        fuzz = p.get("fuzz_weight", 0.0)
+        if fuzz > 0.0:
+            val("sheen", fuzz)
+            val("sheenColor", p.get("fuzz_color", [1.0, 1.0, 1.0]))
+            tex("sheenColor", "fuzz_color")
+            val("sheenRoughness", p.get("fuzz_roughness", 0.5))
 
         emission_lum = p.get("emission_luminance", 0.0)
         if emission_lum > 0.0:
             em_color = p.get("emission_color", [1.0, 1.0, 1.0])
             val("emissive", em_color)
+            # emission_luminance is in nits (cd/m^2).  Dividing by 1000
+            # produces reasonable brightness in typical non-HDR Three.js
+            # scenes.  This is a pragmatic normalization, not physically exact.
             val("emissiveIntensity", emission_lum / 1000.0)
             tex("emissive", "emission_color")
+
+        # Geometry opacity (only when transmission is not active)
+        if transmission <= 0.0:
+            geo_opacity = p.get("geometry_opacity", [1.0, 1.0, 1.0])
+            if isinstance(geo_opacity, list):
+                avg_opacity = sum(geo_opacity) / len(geo_opacity)
+            else:
+                avg_opacity = float(geo_opacity)
+            if avg_opacity < 1.0:
+                val("opacity", avg_opacity)
+                val("transparent", True)
+
+        # Thin-walled geometry → render both sides
+        if p.get("geometry_thin_walled", False):
+            val("side", 2)  # THREE.DoubleSide
 
         tf_weight = p.get("thin_film_weight", 0.0)
         if tf_weight > 0.0:
             val("iridescence", tf_weight)
+            tex("iridescence", "thin_film_weight")
             val("iridescenceIOR", p.get("thin_film_ior", 1.5))
             # thin_film_thickness is in μm; Three.js expects nm
             tf_thickness_um = p.get("thin_film_thickness", 0.5)
             val("iridescenceThicknessRange", [0.0, tf_thickness_um * 1000.0])
+
+    else:
+        log.warning("Unsupported shader model '%s' — only displacement will be mapped", model)
+
+    # Displacement (model-independent — comes from material node, not surface shader)
+    tex("displacement", "displacement")
+    disp_scale = p.get("displacement_scale")
+    if disp_scale is not None:
+        val("displacementScale", disp_scale)
 
     return props
 
@@ -481,8 +613,17 @@ def _convert_exr_to_png(exr_path: Path) -> Path:
         for i, val in enumerate(floats):
             pixels[i] = int(max(0.0, min(1.0, val)) * 255 + 0.5)
         mode = "L"
+    elif len(rgb) == 2:
+        # Two-channel EXR — treat as grayscale + alpha (LA).
+        pixels = bytearray(num_pixels * 2)
+        for ch_idx, ch_data in enumerate(raw):
+            floats = array.array("f", ch_data)
+            for i, val in enumerate(floats):
+                clamped = max(0.0, min(1.0, val))
+                pixels[i * 2 + ch_idx] = int(clamped * 255 + 0.5)
+        mode = "LA"
     else:
-        # Multi-channel → RGB interleaved
+        # 3 or 4 channel → RGB or RGBA interleaved
         pixels = bytearray(num_pixels * len(rgb))
         for ch_idx, ch_data in enumerate(raw):
             floats = array.array("f", ch_data)
@@ -591,31 +732,42 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
             mats = orig_mats
 
         # Merge textures the baker missed from the original.
-        # Skip if the baker intentionally collapsed the texture to a scalar
-        # (present in baked params) — the raw original texture may have been
-        # processed through MaterialX nodes and shouldn't be used directly.
+        # The baker sometimes collapses a texture to a single sampled
+        # scalar (e.g. normal → [0.5, 0.5, 1.0], roughness → 0.3).
+        # The original texture is always preferable over a lossy scalar,
+        # so merge back any original texture that the baker didn't
+        # produce as a baked texture.
         if mats and orig_mats and mats is not orig_mats:
             baked_tex = mats[0].get("textures", {})
             baked_params = mats[0].get("params", {})
             orig_tex = orig_mats[0].get("textures", {})
             for inp_name, tex_info in orig_tex.items():
-                if inp_name not in baked_tex and inp_name not in baked_params:
+                if inp_name not in baked_tex:
                     src_file = tex_info.get("file")
                     if not src_file:
                         continue
                     src_path = (base_dir / src_file).resolve()
                     if src_path.exists():
                         dst = _safe_copy(src_path, tex_dir)
-                        mats[0]["textures"][inp_name] = dict(tex_info, file=dst.name)
+                        mats[0]["textures"][inp_name] = dict(
+                            tex_info, file=str(dst.relative_to(base_dir)),
+                        )
                     else:
                         for alt_ext in (".jpg", ".png", ".jpeg"):
                             alt_path = src_path.with_suffix(alt_ext)
                             if alt_path.exists():
                                 dst = _safe_copy(alt_path, tex_dir)
                                 mats[0]["textures"][inp_name] = dict(
-                                    tex_info, file=dst.name,
+                                    tex_info, file=str(dst.relative_to(base_dir)),
                                 )
                                 break
+
+            # Merge displacement params the baker dropped (displacement lives
+            # on the material node, not the surface shader, so the baker
+            # never sees it).
+            orig_params = orig_mats[0].get("params", {})
+            if "displacement_scale" in orig_params and "displacement_scale" not in baked_params:
+                mats[0]["params"]["displacement_scale"] = orig_params["displacement_scale"]
     else:
         mats = orig_mats
 
