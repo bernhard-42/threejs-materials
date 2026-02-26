@@ -713,7 +713,6 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
 
     has_textures = any(m["textures"] for m in orig_mats)
 
-    used_baker = False
     if has_textures:
         baked_mtlx = base_dir / "material.baked.mtlx"
         try:
@@ -722,7 +721,6 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
             )
             baked_doc, _ = load_document_with_stdlib(baked_mtlx)
             mats = extract_materials(baked_doc)
-            used_baker = bool(mats)
         except Exception as e:
             log.warning("Baking failed for %s: %s — using original doc", mtlx_path, e)
             mats = []
