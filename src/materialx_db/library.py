@@ -48,6 +48,36 @@ _SOURCES = {
 _B64_RE = re.compile(r"(data:[^;]+;base64,).{30,}")
 
 
+def _linear_to_srgb(c: float) -> float:
+    """Convert a single linear RGB component to sRGB (0-1)."""
+    c = max(0.0, min(1.0, c))
+    if c <= 0.0031308:
+        return c * 12.92
+    return 1.055 * (c ** (1.0 / 2.4)) - 0.055
+
+
+def _average_texture_linear(data_uri: str) -> tuple[float, float, float]:
+    """Decode a base64 texture and return its average color in linear RGB."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    _, b64 = data_uri.split(",", 1)
+    img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+    avg = img.resize((1, 1), Image.LANCZOS).getpixel((0, 0))
+    # Pixel values are sRGB 0-255; convert to linear 0-1
+    r, g, b = (_srgb_to_linear(c / 255.0) for c in avg[:3])
+    return (r, g, b)
+
+
+def _srgb_to_linear(c: float) -> float:
+    """Convert a single sRGB component to linear RGB (0-1)."""
+    if c <= 0.04045:
+        return c / 12.92
+    return ((c + 0.055) / 1.055) ** 2.4
+
+
 def _resolve_source(source: MaterialSource | str) -> MaterialSource:
     """Accept a MaterialSource enum or a string and return the enum member."""
     if isinstance(source, MaterialSource):
@@ -343,6 +373,48 @@ class Material:
                 parts.append(f"texture={short!r}")
             lines.append(f"  {key}: {', '.join(parts)}")
         return "\n".join(lines)
+
+    def interpolate_color(self) -> tuple[float, float, float, float]:
+        """Estimate a representative sRGB color + alpha for CAD mode display.
+
+        Returns an ``(r, g, b, a)`` tuple with each component in 0-1 (sRGB).
+        When the material has a color texture, the texture is averaged.
+        When the color is a scalar (linear RGB), it is converted to sRGB.
+
+        Transmission is mapped to partial transparency so glass-like
+        materials look semi-transparent in CAD mode.
+
+        Usage::
+
+            wood = Material.gpuopen.load("Ivory Walnut Solid Wood")
+            obj.material = "wood"
+            obj.color = wood.interpolate_color()  # (0.53, 0.31, 0.18, 1.0)
+        """
+        props = self.properties
+        color_prop = props.get("color", {})
+
+        # --- Color ---
+        if "texture" in color_prop:
+            r, g, b = _average_texture_linear(color_prop["texture"])
+        elif "value" in color_prop and isinstance(color_prop["value"], list):
+            r, g, b = color_prop["value"][:3]
+        else:
+            r, g, b = 0.5, 0.5, 0.5
+
+        # Linear → sRGB
+        sr, sg, sb = _linear_to_srgb(r), _linear_to_srgb(g), _linear_to_srgb(b)
+
+        # --- Alpha ---
+        alpha = 1.0
+        opacity_val = props.get("opacity", {}).get("value")
+        if isinstance(opacity_val, (int, float)) and opacity_val < 1.0:
+            alpha = float(opacity_val)
+        else:
+            transmission_val = props.get("transmission", {}).get("value")
+            if isinstance(transmission_val, (int, float)) and transmission_val > 0:
+                alpha = max(0.15, 1.0 - transmission_val * 0.7)
+
+        return (round(sr, 4), round(sg, 4), round(sb, 4), round(alpha, 4))
 
     def __getitem__(self, key: str):
         return self.to_dict()[key]

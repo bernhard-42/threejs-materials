@@ -13,6 +13,17 @@ A Python library that downloads PBR materials on demand from four open sources a
 
 Browse materials on the source websites, then load them by name.
 
+<table>
+<tr>
+<td align="center"><strong>CAD mode</strong> (<code>interpolate_color()</code>)</td>
+<td align="center"><strong>Studio mode</strong> (full PBR)</td>
+</tr>
+<tr>
+<td><img src="screenshots/CAD mode.png" width="400"></td>
+<td><img src="screenshots/Studio mode.png" width="400"></td>
+</tr>
+</table>
+
 ## Installation
 
 ```bash
@@ -93,6 +104,22 @@ from materialx_db import encode_texture_base64
 data_uri = encode_texture_base64("textures/normal.png")
 # -> 'data:image/png;base64,iVBORw0KGgo...'
 ```
+
+### `material.interpolate_color() -> (r, g, b, a)`
+
+Estimate a single representative sRGB color from a material — useful for CAD viewers that need a flat color per object while keeping a material dictionary for full PBR rendering.
+
+```python
+from materialx_db import Material
+
+wood = Material.gpuopen.load("Ivory Walnut Solid Wood")
+
+materials = {"wood": wood}      # keep for full PBR rendering
+object.material = "wood"
+object.color = wood.interpolate_color()   # (0.53, 0.31, 0.18, 1.0)
+```
+
+When the material has a color texture, the texture is decoded and averaged (requires `Pillow`). Scalar colors (linear RGB) are converted to sRGB. Transmission and opacity are mapped to the alpha channel so glass-like materials appear semi-transparent.
 
 ## Output format
 
