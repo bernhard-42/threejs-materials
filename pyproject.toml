@@ -12,6 +12,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+usd = ["usd-core>=24.11"]
 test = ["pytest"]
 
 [build-system]

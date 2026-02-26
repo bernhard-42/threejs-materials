@@ -315,6 +315,36 @@ class Material:
             "properties": properties,
         })
 
+    @classmethod
+    def from_usd(cls, usd_file: str) -> "Material":
+        """Load a USD file (.usda, .usdc, .usdz) with UsdPreviewSurface materials.
+
+        Textures are resolved relative to the file's location.
+        USDZ archives with embedded textures are supported.
+        """
+        usd_path = Path(usd_file).resolve()
+        if not usd_path.exists():
+            raise FileNotFoundError(f"File not found: {usd_path}")
+
+        try:
+            from materialx_db.usd_reader import extract_usd_properties
+        except ImportError as e:
+            raise ImportError(
+                "USD support requires the 'usd-core' package. "
+                "Install with: pip install materialx-db[usd]"
+            ) from e
+
+        properties = extract_usd_properties(usd_path)
+        name = usd_path.stem
+        return cls({
+            "id": name,
+            "name": name,
+            "source": "usd",
+            "url": "",
+            "license": "",
+            "properties": properties,
+        })
+
     def override(self, *, repeat=None, **props) -> "Material":
         """Return a new Material with property and/or texture repeat overrides.
 

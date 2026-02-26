@@ -37,6 +37,14 @@ uv sync        # or: pip install -e .
 - `requests >= 2.31.0` — HTTP downloads
 - `openexr >= 3.3` — EXR to PNG conversion
 
+### Optional: USD support
+
+```bash
+pip install materialx-db[usd]
+```
+
+This installs `usd-core` for `Material.from_usd()`. Note that `usd-core` may not support the latest Python version.
+
 ## API
 
 ### `Material.{source}.load(name, resolution="1K") -> Material`
@@ -93,6 +101,20 @@ mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
 ```
 
 Texture paths in the `.mtlx` are resolved relative to the file's location.
+
+### `Material.from_usd(usd_file) -> Material`
+
+Load a USD file (`.usda`, `.usdc`, `.usdz`) with `UsdPreviewSurface` materials.
+
+```python
+from materialx_db import Material
+
+mat = Material.from_usd("model.usda")
+```
+
+Textures are resolved relative to the file location. USDZ archives with embedded textures are supported.
+
+UsdPreviewSurface inputs are mapped to Three.js properties: `diffuseColor` → `color`, `metallic` → `metalness`, `roughness`, `normal`, `emissiveColor` → `emissive`, `clearcoat`, `clearcoatRoughness`, `ior`, `occlusion` → `ao`, `displacement`, `opacity`, `opacityThreshold` → `alphaTest`, `specularColor`. Both metallic and specular workflows are supported.
 
 ### `encode_texture_base64(file_path) -> str`
 
