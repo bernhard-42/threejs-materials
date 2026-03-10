@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from materialx_db.library import Material
-from materialx_db.usd_reader import extract_usd_properties
+from threejs_materials.library import Material
+from threejs_materials.usd_reader import extract_usd_properties
 
 from conftest import _make_1x1_png
 
@@ -26,46 +26,48 @@ def _usda_material(
     shader_block = textwrap.indent(shader_inputs, "        ").rstrip()
     tex_block = textwrap.indent(texture_nodes, "    ").rstrip()
     lines = [
-        '#usda 1.0',
-        '',
+        "#usda 1.0",
+        "",
         f'def Material "{mat_name}"',
-        '{',
-        f'    token outputs:surface.connect = </{mat_name}/PreviewSurface.outputs:surface>',
-        '',
+        "{",
+        f"    token outputs:surface.connect = </{mat_name}/PreviewSurface.outputs:surface>",
+        "",
         '    def Shader "PreviewSurface"',
-        '    {',
+        "    {",
         '        uniform token info:id = "UsdPreviewSurface"',
     ]
     if shader_block:
         lines.append(shader_block)
     lines += [
-        '        token outputs:surface',
-        '    }',
+        "        token outputs:surface",
+        "    }",
     ]
     if tex_block:
-        lines.append('')
+        lines.append("")
         lines.append(tex_block)
     lines += [
-        '}',
-        '',
+        "}",
+        "",
     ]
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 def _texture_node(node_name, file_path, output_type="float3"):
     """Build a UsdUVTexture node USDA snippet."""
     if output_type == "float3":
-        output_line = 'float3 outputs:rgb'
+        output_line = "float3 outputs:rgb"
     else:
-        output_line = 'float outputs:r'
-    return '\n'.join([
-        f'def Shader "{node_name}"',
-        '{',
-        f'    uniform token info:id = "UsdUVTexture"',
-        f'    asset inputs:file = @{file_path}@',
-        f'    {output_line}',
-        '}',
-    ])
+        output_line = "float outputs:r"
+    return "\n".join(
+        [
+            f'def Shader "{node_name}"',
+            "{",
+            '    uniform token info:id = "UsdUVTexture"',
+            f"    asset inputs:file = @{file_path}@",
+            f"    {output_line}",
+            "}",
+        ]
+    )
 
 
 def _write_usda(tmp_path, usda_string, filename="test.usda"):
@@ -82,40 +84,46 @@ def _write_usda(tmp_path, usda_string, filename="test.usda"):
 
 class TestBasicScalars:
     def test_diffuse_color(self, tmp_path):
-        usda = _usda_material(shader_inputs='color3f inputs:diffuseColor = (0.8, 0.2, 0.1)')
+        usda = _usda_material(
+            shader_inputs="color3f inputs:diffuseColor = (0.8, 0.2, 0.1)"
+        )
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert props["color"]["value"] == pytest.approx([0.8, 0.2, 0.1])
 
     def test_metallic(self, tmp_path):
-        usda = _usda_material(shader_inputs='float inputs:metallic = 0.9')
+        usda = _usda_material(shader_inputs="float inputs:metallic = 0.9")
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert props["metalness"]["value"] == pytest.approx(0.9)
 
     def test_roughness_non_default(self, tmp_path):
-        usda = _usda_material(shader_inputs='float inputs:roughness = 0.3')
+        usda = _usda_material(shader_inputs="float inputs:roughness = 0.3")
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert props["roughness"]["value"] == pytest.approx(0.3)
 
     def test_emissive_color(self, tmp_path):
-        usda = _usda_material(shader_inputs='color3f inputs:emissiveColor = (1.0, 0.5, 0.0)')
+        usda = _usda_material(
+            shader_inputs="color3f inputs:emissiveColor = (1.0, 0.5, 0.0)"
+        )
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert props["emissive"]["value"] == pytest.approx([1.0, 0.5, 0.0])
 
     def test_clearcoat(self, tmp_path):
-        usda = _usda_material(shader_inputs=textwrap.dedent("""\
+        usda = _usda_material(
+            shader_inputs=textwrap.dedent("""\
             float inputs:clearcoat = 0.8
-            float inputs:clearcoatRoughness = 0.1"""))
+            float inputs:clearcoatRoughness = 0.1""")
+        )
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert props["clearcoat"]["value"] == pytest.approx(0.8)
         assert props["clearcoatRoughness"]["value"] == pytest.approx(0.1)
 
     def test_ior(self, tmp_path):
-        usda = _usda_material(shader_inputs='float inputs:ior = 1.45')
+        usda = _usda_material(shader_inputs="float inputs:ior = 1.45")
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert props["ior"]["value"] == pytest.approx(1.45)
@@ -148,7 +156,9 @@ class TestTextureConnections:
         tex_path = tmp_path / "diffuse.png"
         tex_path.write_bytes(_make_1x1_png(128, 64, 32))
 
-        shader_inputs = 'color3f inputs:diffuseColor.connect = </TestMat/DiffuseTex.outputs:rgb>'
+        shader_inputs = (
+            "color3f inputs:diffuseColor.connect = </TestMat/DiffuseTex.outputs:rgb>"
+        )
         tex_nodes = _texture_node("DiffuseTex", "diffuse.png", "float3")
         usda = _usda_material(shader_inputs=shader_inputs, texture_nodes=tex_nodes)
         path = _write_usda(tmp_path, usda)
@@ -165,7 +175,9 @@ class TestTextureConnections:
         tex_path = tmp_path / "normal.png"
         tex_path.write_bytes(_make_1x1_png(128, 128, 255))
 
-        shader_inputs = 'normal3f inputs:normal.connect = </TestMat/NormalTex.outputs:rgb>'
+        shader_inputs = (
+            "normal3f inputs:normal.connect = </TestMat/NormalTex.outputs:rgb>"
+        )
         tex_nodes = _texture_node("NormalTex", "normal.png", "float3")
         usda = _usda_material(shader_inputs=shader_inputs, texture_nodes=tex_nodes)
         path = _write_usda(tmp_path, usda)
@@ -179,7 +191,7 @@ class TestTextureConnections:
         tex_path = tmp_path / "roughness.png"
         tex_path.write_bytes(_make_1x1_png(128, 128, 128))
 
-        shader_inputs = 'float inputs:roughness.connect = </TestMat/RoughTex.outputs:r>'
+        shader_inputs = "float inputs:roughness.connect = </TestMat/RoughTex.outputs:r>"
         tex_nodes = _texture_node("RoughTex", "roughness.png", "float")
         usda = _usda_material(shader_inputs=shader_inputs, texture_nodes=tex_nodes)
         path = _write_usda(tmp_path, usda)
@@ -193,7 +205,7 @@ class TestTextureConnections:
         tex_path = tmp_path / "metallic.png"
         tex_path.write_bytes(_make_1x1_png(255, 255, 255))
 
-        shader_inputs = 'float inputs:metallic.connect = </TestMat/MetalTex.outputs:r>'
+        shader_inputs = "float inputs:metallic.connect = </TestMat/MetalTex.outputs:r>"
         tex_nodes = _texture_node("MetalTex", "metallic.png", "float")
         usda = _usda_material(shader_inputs=shader_inputs, texture_nodes=tex_nodes)
         path = _write_usda(tmp_path, usda)
@@ -207,7 +219,7 @@ class TestTextureConnections:
         tex_path = tmp_path / "ao.png"
         tex_path.write_bytes(_make_1x1_png(200, 200, 200))
 
-        shader_inputs = 'float inputs:occlusion.connect = </TestMat/AOTex.outputs:r>'
+        shader_inputs = "float inputs:occlusion.connect = </TestMat/AOTex.outputs:r>"
         tex_nodes = _texture_node("AOTex", "ao.png", "float")
         usda = _usda_material(shader_inputs=shader_inputs, texture_nodes=tex_nodes)
         path = _write_usda(tmp_path, usda)
@@ -225,7 +237,7 @@ class TestTextureConnections:
 class TestOpacity:
     def test_blend_mode(self, tmp_path):
         """opacity < 1 without threshold → transparent blend mode."""
-        usda = _usda_material(shader_inputs='float inputs:opacity = 0.5')
+        usda = _usda_material(shader_inputs="float inputs:opacity = 0.5")
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert props["opacity"]["value"] == pytest.approx(0.5)
@@ -245,7 +257,9 @@ class TestOpacity:
 
     def test_opaque_default(self, tmp_path):
         """Default opacity (1.0) → no opacity/transparent properties."""
-        usda = _usda_material(shader_inputs='color3f inputs:diffuseColor = (0.5, 0.5, 0.5)')
+        usda = _usda_material(
+            shader_inputs="color3f inputs:diffuseColor = (0.5, 0.5, 0.5)"
+        )
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert "opacity" not in props
@@ -290,36 +304,44 @@ class TestSpecularWorkflow:
 class TestSkipDefaults:
     def test_default_roughness_omitted(self, tmp_path):
         """roughness=0.5 (default) should not appear in output."""
-        usda = _usda_material(shader_inputs=textwrap.dedent("""\
+        usda = _usda_material(
+            shader_inputs=textwrap.dedent("""\
             color3f inputs:diffuseColor = (0.5, 0.5, 0.5)
-            float inputs:roughness = 0.5"""))
+            float inputs:roughness = 0.5""")
+        )
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert "roughness" not in props
 
     def test_default_metallic_omitted(self, tmp_path):
         """metallic=0.0 (default) should not appear in output."""
-        usda = _usda_material(shader_inputs=textwrap.dedent("""\
+        usda = _usda_material(
+            shader_inputs=textwrap.dedent("""\
             color3f inputs:diffuseColor = (0.5, 0.5, 0.5)
-            float inputs:metallic = 0.0"""))
+            float inputs:metallic = 0.0""")
+        )
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert "metalness" not in props
 
     def test_default_ior_omitted(self, tmp_path):
         """ior=1.5 (default) should not appear in output."""
-        usda = _usda_material(shader_inputs=textwrap.dedent("""\
+        usda = _usda_material(
+            shader_inputs=textwrap.dedent("""\
             color3f inputs:diffuseColor = (0.5, 0.5, 0.5)
-            float inputs:ior = 1.5"""))
+            float inputs:ior = 1.5""")
+        )
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert "ior" not in props
 
     def test_default_emissive_omitted(self, tmp_path):
         """emissiveColor=(0,0,0) (default) should not appear in output."""
-        usda = _usda_material(shader_inputs=textwrap.dedent("""\
+        usda = _usda_material(
+            shader_inputs=textwrap.dedent("""\
             color3f inputs:diffuseColor = (0.5, 0.5, 0.5)
-            color3f inputs:emissiveColor = (0.0, 0.0, 0.0)"""))
+            color3f inputs:emissiveColor = (0.0, 0.0, 0.0)""")
+        )
         path = _write_usda(tmp_path, usda)
         props = extract_usd_properties(path)
         assert "emissive" not in props
@@ -361,7 +383,7 @@ class TestMultipleMaterials:
             }
         """)
         path = _write_usda(tmp_path, usda)
-        with caplog.at_level(logging.WARNING, logger="materialx_db.usd_reader"):
+        with caplog.at_level(logging.WARNING, logger="threejs_materials.usd_reader"):
             props = extract_usd_properties(path)
 
         assert any("2 UsdPreviewSurface materials" in r.message for r in caplog.records)
@@ -402,7 +424,8 @@ class TestFromUsd:
     def test_basic_integration(self, tmp_path):
         """from_usd() returns a Material with correct metadata."""
         usda = _usda_material(
-            shader_inputs='color3f inputs:diffuseColor = (0.7, 0.3, 0.1)')
+            shader_inputs="color3f inputs:diffuseColor = (0.7, 0.3, 0.1)"
+        )
         path = _write_usda(tmp_path, usda, filename="copper.usda")
 
         mat = Material.from_usd(str(path))
@@ -415,7 +438,8 @@ class TestFromUsd:
     def test_override_works(self, tmp_path):
         """Material.override() works on USD-loaded materials."""
         usda = _usda_material(
-            shader_inputs='color3f inputs:diffuseColor = (0.5, 0.5, 0.5)')
+            shader_inputs="color3f inputs:diffuseColor = (0.5, 0.5, 0.5)"
+        )
         path = _write_usda(tmp_path, usda)
 
         mat = Material.from_usd(str(path))
@@ -425,7 +449,8 @@ class TestFromUsd:
     def test_to_dict(self, tmp_path):
         """to_dict() / to_json() work on USD-loaded materials."""
         usda = _usda_material(
-            shader_inputs='color3f inputs:diffuseColor = (0.5, 0.5, 0.5)')
+            shader_inputs="color3f inputs:diffuseColor = (0.5, 0.5, 0.5)"
+        )
         path = _write_usda(tmp_path, usda)
 
         mat = Material.from_usd(str(path))
@@ -434,6 +459,7 @@ class TestFromUsd:
         assert "properties" in d
 
         import json
+
         j = mat.to_json()
         parsed = json.loads(j)
         assert parsed["source"] == "usd"

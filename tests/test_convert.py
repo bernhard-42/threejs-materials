@@ -1,4 +1,4 @@
-"""Tests for materialx_db.convert — offline, no GPU."""
+"""Tests for threejs_materials.convert — offline, no GPU."""
 
 import logging
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 import MaterialX as mx
 import pytest
 
-from materialx_db.convert import (
+from threejs_materials.convert import (
     encode_texture_base64,
     extract_materials,
     parse_value,
@@ -512,6 +512,7 @@ class TestEncodeTextureBase64:
         assert result.startswith("data:image/png;base64,")
         # Must be valid base64
         import base64
+
         payload = result.split(",", 1)[1]
         decoded = base64.b64decode(payload)
         assert decoded[:4] == b"\x89PNG"
@@ -693,8 +694,6 @@ class TestDisplacement:
         assert "texture" in props["displacement"]
         assert props["displacementScale"]["value"] == pytest.approx(0.05)
 
-
-
     def test_warning_logged(self, tmp_path, caplog):
         """_process_mtlx should log a warning for multi-material documents."""
         xml = make_mtlx_string(
@@ -704,16 +703,19 @@ class TestDisplacement:
             extra_materials=[
                 {
                     "name": "Mat2",
-                    "params": {"base": ("float", "0.5"), "base_color": ("color3", "0.5, 0.5, 0.5")},
+                    "params": {
+                        "base": ("float", "0.5"),
+                        "base_color": ("color3", "0.5, 0.5, 0.5"),
+                    },
                 },
             ],
         )
         mtlx_file = tmp_path / "multi.mtlx"
         mtlx_file.write_text(xml)
 
-        from materialx_db.convert import _process_mtlx
+        from threejs_materials.convert import _process_mtlx
 
-        with caplog.at_level(logging.WARNING, logger="materialx_db.convert"):
+        with caplog.at_level(logging.WARNING, logger="threejs_materials.convert"):
             props, model = _process_mtlx(mtlx_file)
 
         assert any("contains 2 materials" in r.message for r in caplog.records)
@@ -733,7 +735,7 @@ class TestUnknownShaderModel:
             "params": {},
             "textures": {},
         }
-        with caplog.at_level(logging.WARNING, logger="materialx_db.convert"):
+        with caplog.at_level(logging.WARNING, logger="threejs_materials.convert"):
             props = to_threejs_physical(mat, tmp_path)
         assert any("Unsupported shader model" in r.message for r in caplog.records)
 

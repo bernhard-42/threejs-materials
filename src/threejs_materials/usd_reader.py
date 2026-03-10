@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pxr import Gf, Sdf, Usd, UsdShade
 
-from materialx_db.convert import encode_texture_base64
+from threejs_materials.convert import encode_texture_base64
 
 log = logging.getLogger(__name__)
 
@@ -290,11 +290,15 @@ def extract_usd_properties(usd_path: Path) -> dict:
     opacity = _extract_value(shader, "opacity")
     has_opacity_tex = _resolve_texture(shader, "opacity", usd_dir) is not None
 
-    if opacity_threshold is not None and not _is_default("opacityThreshold", opacity_threshold):
+    if opacity_threshold is not None and not _is_default(
+        "opacityThreshold", opacity_threshold
+    ):
         # Mask/cutout mode
         val("alphaTest", opacity_threshold)
         tex("opacity", "opacity")
-    elif has_opacity_tex or (opacity is not None and not _is_default("opacity", opacity)):
+    elif has_opacity_tex or (
+        opacity is not None and not _is_default("opacity", opacity)
+    ):
         # Blend mode
         if opacity is not None and not _is_default("opacity", opacity):
             val("opacity", opacity)

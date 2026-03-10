@@ -1,4 +1,4 @@
-# materialx-db
+# threejs-materials
 
 A Python library that converts PBR materials into [Three.js `MeshPhysicalMaterial`](https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial)-compatible JSON with base64-encoded textures.
 
@@ -18,7 +18,7 @@ The primary input format is [MaterialX](https://materialx.org/) — the library 
 ## Installation
 
 ```bash
-cd materialx-db
+cd threejs-materials
 uv sync        # or: pip install -e .
 ```
 
@@ -31,7 +31,7 @@ uv sync        # or: pip install -e .
 ### Optional: USD support
 
 ```bash
-pip install materialx-db[usd]
+pip install threejs-materials[usd]
 ```
 
 This installs `usd-core` for `Material.from_usd()`. Note that `usd-core` may not support the latest Python version.
@@ -136,7 +136,7 @@ Overrides set the `value` of the named property, creating it if absent. Existing
 Encode an image file as a base64 data URI. Automatically converts EXR to PNG.
 
 ```python
-from materialx_db import encode_texture_base64
+from threejs_materials import encode_texture_base64
 
 data_uri = encode_texture_base64("textures/normal.png")
 # -> 'data:image/png;base64,iVBORw0KGgo...'
@@ -147,7 +147,7 @@ data_uri = encode_texture_base64("textures/normal.png")
 Estimate a single representative sRGB color from a material — useful for CAD viewers that need a flat color per object while keeping a material dictionary for full PBR rendering.
 
 ```python
-from materialx_db import Material
+from threejs_materials import Material
 
 wood = Material.gpuopen.load("Ivory Walnut Solid Wood")
 
@@ -205,7 +205,7 @@ Browse materials on the source websites, then load them by name.
 Download, convert, and cache a material.
 
 ```python
-from materialx_db import Material
+from threejs_materials import Material
 
 mat = Material.gpuopen.load("Car Paint", resolution="1K")
 mat = Material.ambientcg.load("Onyx015", resolution="1K")
@@ -233,7 +233,7 @@ PhysicallyBased materials are parametric — no resolution needed (and not accep
 Print available sources with clickable URLs.
 
 ```python
-from materialx_db import Material
+from threejs_materials import Material
 
 Material.list_sources()
 # Material sources:
@@ -248,7 +248,7 @@ Material.list_sources()
 Convert a local `.mtlx` file without downloading anything.
 
 ```python
-from materialx_db import Material
+from threejs_materials import Material
 
 mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
 ```
@@ -351,7 +351,7 @@ For Blender users and other USD workflows: `Material.from_usd()` reads `UsdPrevi
 Load a USD file (`.usda`, `.usdc`, `.usdz`) with `UsdPreviewSurface` materials.
 
 ```python
-from materialx_db import Material
+from threejs_materials import Material
 
 mat = Material.from_usd("model.usda")
 ```

@@ -1,4 +1,4 @@
-"""Shared fixtures for materialx-db tests."""
+"""Shared fixtures for threejs-materials tests."""
 
 import io
 import struct

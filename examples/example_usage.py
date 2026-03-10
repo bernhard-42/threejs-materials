@@ -3,7 +3,7 @@
 
 import logging
 
-from materialx_db import Material
+from threejs_materials import Material
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -23,10 +23,30 @@ print("=" * 60)
 
 examples = [
     # (loader, name, resolution, description)
-    (Material.physicallybased, "Gold", None, "PhysicallyBased — parametric, no textures"),
-    (Material.ambientcg, "Fabric038", "1K", "ambientCG — open_pbr_surface with textures"),
-    (Material.polyhaven, "rusty_metal", "1k", "PolyHaven — standard_surface with textures"),
-    (Material.gpuopen, "Copper Brushed", "1K", "GPUOpen — standard_surface, baked procedural"),
+    (
+        Material.physicallybased,
+        "Gold",
+        None,
+        "PhysicallyBased — parametric, no textures",
+    ),
+    (
+        Material.ambientcg,
+        "Fabric038",
+        "1K",
+        "ambientCG — open_pbr_surface with textures",
+    ),
+    (
+        Material.polyhaven,
+        "rusty_metal",
+        "1k",
+        "PolyHaven — standard_surface with textures",
+    ),
+    (
+        Material.gpuopen,
+        "Copper Brushed",
+        "1K",
+        "GPUOpen — standard_surface, baked procedural",
+    ),
 ]
 
 for loader, name, resolution, description in examples:

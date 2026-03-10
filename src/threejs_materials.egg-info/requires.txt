@@ -1,0 +1,10 @@
+materialx>=1.39.4
+requests>=2.31.0
+openexr>=3.3
+pillow>=10.0
+
+[test]
+pytest
+
+[usd]
+usd-core>=24.11

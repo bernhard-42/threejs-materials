@@ -9,8 +9,12 @@ import tempfile
 from enum import Enum
 from pathlib import Path
 
-from materialx_db.convert import _process_mtlx, extract_materials, load_document_with_stdlib
-from materialx_db.sources import ambientcg, gpuopen, polyhaven, physicallybased
+from threejs_materials.convert import (
+    _process_mtlx,
+    extract_materials,
+    load_document_with_stdlib,
+)
+from threejs_materials.sources import ambientcg, gpuopen, polyhaven, physicallybased
 
 log = logging.getLogger(__name__)
 
@@ -120,8 +124,15 @@ class _SourceLoader:
 class Material:
     """A loaded PBR material with Three.js MeshPhysicalMaterial properties."""
 
-    __slots__ = ("id", "name", "source", "url", "license", "properties",
-                 "texture_repeat")
+    __slots__ = (
+        "id",
+        "name",
+        "source",
+        "url",
+        "license",
+        "properties",
+        "texture_repeat",
+    )
 
     ambientcg = _SourceLoader(MaterialSource.ambientCG, "ambientcg")
     gpuopen = _SourceLoader(MaterialSource.GPUOpen, "gpuopen")
@@ -306,14 +317,16 @@ class Material:
             baked_mtlx.unlink(missing_ok=True)
 
         name = mtlx_path.stem
-        return cls({
-            "id": name,
-            "name": name,
-            "source": "local",
-            "url": "",
-            "license": "",
-            "properties": properties,
-        })
+        return cls(
+            {
+                "id": name,
+                "name": name,
+                "source": "local",
+                "url": "",
+                "license": "",
+                "properties": properties,
+            }
+        )
 
     @classmethod
     def from_usd(cls, usd_file: str) -> "Material":
@@ -327,23 +340,25 @@ class Material:
             raise FileNotFoundError(f"File not found: {usd_path}")
 
         try:
-            from materialx_db.usd_reader import extract_usd_properties
+            from threejs_materials.usd_reader import extract_usd_properties
         except ImportError as e:
             raise ImportError(
                 "USD support requires the 'usd-core' package. "
-                "Install with: pip install materialx-db[usd]"
+                "Install with: pip install threejs-materials[usd]"
             ) from e
 
         properties = extract_usd_properties(usd_path)
         name = usd_path.stem
-        return cls({
-            "id": name,
-            "name": name,
-            "source": "usd",
-            "url": "",
-            "license": "",
-            "properties": properties,
-        })
+        return cls(
+            {
+                "id": name,
+                "name": name,
+                "source": "usd",
+                "url": "",
+                "license": "",
+                "properties": properties,
+            }
+        )
 
     def override(self, *, repeat=None, **props) -> "Material":
         """Return a new Material with property and/or texture repeat overrides.
@@ -367,7 +382,9 @@ class Material:
             new_props.setdefault(key, {})["value"] = value
         data = self.to_dict()
         data["properties"] = new_props
-        data["texture_repeat"] = tuple(repeat) if repeat is not None else self.texture_repeat
+        data["texture_repeat"] = (
+            tuple(repeat) if repeat is not None else self.texture_repeat
+        )
         return Material(data)
 
     def to_dict(self) -> dict:

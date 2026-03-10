@@ -1,4 +1,4 @@
-"""Tests for materialx_db.library — offline, no GPU."""
+"""Tests for threejs_materials.library — offline, no GPU."""
 
 import json
 from pathlib import Path
@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from materialx_db.library import (
+from threejs_materials.library import (
     CACHE_DIR,
     Material,
     MaterialSource,
@@ -216,7 +216,7 @@ class TestClearCache:
         cache.mkdir()
         (cache / "ambientcg_brick_1k.json").write_text("{}")
         (cache / "gpuopen_wood_2k.json").write_text("{}")
-        monkeypatch.setattr("materialx_db.library.CACHE_DIR", cache)
+        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", cache)
 
         count = Material.clear_cache()
         assert count == 2
@@ -227,7 +227,7 @@ class TestClearCache:
         cache.mkdir()
         (cache / "ambientcg_brick_1k.json").write_text("{}")
         (cache / "gpuopen_wood_2k.json").write_text("{}")
-        monkeypatch.setattr("materialx_db.library.CACHE_DIR", cache)
+        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", cache)
 
         count = Material.clear_cache(source="ambientcg")
         assert count == 1
@@ -238,7 +238,7 @@ class TestClearCache:
         cache.mkdir()
         (cache / "ambientcg_brick_1k.json").write_text("{}")
         (cache / "ambientcg_wood_1k.json").write_text("{}")
-        monkeypatch.setattr("materialx_db.library.CACHE_DIR", cache)
+        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", cache)
 
         count = Material.clear_cache(name="brick")
         assert count == 1
@@ -249,12 +249,12 @@ class TestClearCache:
         cache.mkdir()
         (cache / "ambientcg_brick_1k.json").write_text("{}")
         (cache / "gpuopen_brick_2k.json").write_text("{}")
-        monkeypatch.setattr("materialx_db.library.CACHE_DIR", cache)
+        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", cache)
 
         count = Material.clear_cache(name="brick", source="ambientcg")
         assert count == 1
         assert (cache / "gpuopen_brick_2k.json").exists()
 
     def test_clear_nonexistent_cache(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("materialx_db.library.CACHE_DIR", tmp_path / "nope")
+        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", tmp_path / "nope")
         assert Material.clear_cache() == 0
