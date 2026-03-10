@@ -6,7 +6,6 @@ import logging
 import re
 import shutil
 import tempfile
-from enum import Enum
 from pathlib import Path
 
 from threejs_materials.convert import (
@@ -20,36 +19,18 @@ log = logging.getLogger(__name__)
 
 CACHE_DIR = Path.home() / ".materialx-cache"
 
-
-class MaterialSource(Enum):
-    """Available material sources."""
-
-    ambientCG = "ambientcg"
-    GPUOpen = "gpuopen"
-    PolyHaven = "polyhaven"
-    PhysicallyBased = "physicallybased"
-
-
-_SOURCES = {
-    MaterialSource.ambientCG: {
-        "module": ambientcg,
-        "url": "https://ambientcg.com/list?type=material",
-    },
-    MaterialSource.GPUOpen: {
-        "module": gpuopen,
-        "url": "https://matlib.gpuopen.com/main/materials/all",
-    },
-    MaterialSource.PolyHaven: {
-        "module": polyhaven,
-        "url": "https://polyhaven.com/textures",
-    },
-    MaterialSource.PhysicallyBased: {
-        "module": physicallybased,
-        "url": "https://physicallybased.info/",
-    },
-}
-
 _B64_RE = re.compile(r"(data:[^;]+;base64,).{30,}")
+
+
+def _cache_path(source: str, name: str, resolution: str | None) -> Path:
+    """Build the cache file path for a material."""
+    safe_name = name.lower().replace(" ", "_")
+    if resolution:
+        safe_res = resolution.lower().replace(" ", "_")
+        filename = f"{source}_{safe_name}_{safe_res}.json"
+    else:
+        filename = f"{source}_{safe_name}.json"
+    return CACHE_DIR / filename
 
 
 def _linear_to_srgb(c: float) -> float:
@@ -58,6 +39,13 @@ def _linear_to_srgb(c: float) -> float:
     if c <= 0.0031308:
         return c * 12.92
     return 1.055 * (c ** (1.0 / 2.4)) - 0.055
+
+
+def _srgb_to_linear(c: float) -> float:
+    """Convert a single sRGB component to linear RGB (0-1)."""
+    if c <= 0.04045:
+        return c / 12.92
+    return ((c + 0.055) / 1.055) ** 2.4
 
 
 def _average_texture_linear(data_uri: str) -> tuple[float, float, float]:
@@ -75,50 +63,63 @@ def _average_texture_linear(data_uri: str) -> tuple[float, float, float]:
     return (r, g, b)
 
 
-def _srgb_to_linear(c: float) -> float:
-    """Convert a single sRGB component to linear RGB (0-1)."""
-    if c <= 0.04045:
-        return c / 12.92
-    return ((c + 0.055) / 1.055) ** 2.4
-
-
-def _resolve_source(source: MaterialSource | str) -> MaterialSource:
-    """Accept a MaterialSource enum or a string and return the enum member."""
-    if isinstance(source, MaterialSource):
-        return source
-    val = source.lower()
-    for member in MaterialSource:
-        if member.value == val or member.name.lower() == val:
-            return member
-    raise ValueError(
-        f"Unknown source: '{source}'. Use one of: "
-        f"{[m.name for m in MaterialSource]}"
-    )
-
-
-def _cache_path(source: str, name: str, actual_res: str | None) -> Path:
-    """Build the cache file path for a material."""
-    safe_name = name.lower().replace(" ", "_")
-    if actual_res:
-        safe_res = actual_res.lower().replace(" ", "_")
-        filename = f"{source}_{safe_name}_{safe_res}.json"
-    else:
-        filename = f"{source}_{safe_name}.json"
-    return CACHE_DIR / filename
-
 
 class _SourceLoader:
-    """Proxy providing .load() for a specific material source."""
+    """Proxy providing ``.load()`` for a specific material source."""
 
-    def __init__(self, source: MaterialSource, attr_name: str):
-        self._source = source
-        self._attr_name = attr_name
+    def __init__(self, module, source_name: str):
+        self._module = module
+        self._source = source_name
 
     def load(self, name: str, resolution: str = "1K") -> "Material":
-        return Material._load(self._source, name, resolution)
+        """Download, convert, and cache a material.
+
+        Parameters
+        ----------
+        name : str
+            Material name/ID as shown on the source website.
+        resolution : str
+            ``"1K"``, ``"2K"``, ``"4K"``, or ``"8K"`` (case-insensitive).
+            Defaults to ``"1K"``. Ignored for PhysicallyBased.
+        """
+        label = f"{self._source} / {name}"
+        res_key = resolution.upper()
+
+        cache_file = _cache_path(self._source, name, res_key)
+        if cache_file.exists():
+            mat = Material(json.loads(cache_file.read_text()))
+            print(f"{label}: loading from cache — License: {mat.license}")
+            return mat
+
+        print(f"{label}: downloading ...", end=" ", flush=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._module.fetch(name, res_key, Path(tmp))
+            if result.mtlx_path:
+                print("baking ...", end=" ", flush=True)
+                properties, _ = _process_mtlx(result.mtlx_path)
+            else:
+                properties = result.properties
+            for key, v in result.overrides.items():
+                if key in properties:
+                    properties[key]["value"] = v
+
+        output = {
+            "id": name,
+            "name": name,
+            "source": self._source,
+            "url": result.url,
+            "license": result.license,
+            "properties": properties,
+        }
+
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(output, indent=2))
+        print(f"saving ... done — License: {result.license}")
+
+        return Material(output)
 
     def __repr__(self):
-        return f"Material.{self._attr_name}"
+        return f"Material.{self._source}"
 
 
 class Material:
@@ -134,10 +135,10 @@ class Material:
         "texture_repeat",
     )
 
-    ambientcg = _SourceLoader(MaterialSource.ambientCG, "ambientcg")
-    gpuopen = _SourceLoader(MaterialSource.GPUOpen, "gpuopen")
-    polyhaven = _SourceLoader(MaterialSource.PolyHaven, "polyhaven")
-    physicallybased = _SourceLoader(MaterialSource.PhysicallyBased, "physicallybased")
+    ambientcg = _SourceLoader(ambientcg, "ambientcg")
+    gpuopen = _SourceLoader(gpuopen, "gpuopen")
+    polyhaven = _SourceLoader(polyhaven, "polyhaven")
+    physicallybased = _SourceLoader(physicallybased, "physicallybased")
 
     def __init__(self, data: dict):
         self.id: str = data["id"]
@@ -149,102 +150,14 @@ class Material:
         self.texture_repeat: tuple | None = data.get("texture_repeat")
 
     @classmethod
-    def _load(
-        cls, source: MaterialSource | str, name: str, resolution: str = "1K"
-    ) -> "Material":
-        """Download, convert, and cache a material as Three.js MeshPhysicalMaterial JSON.
-
-        Parameters
-        ----------
-        source : MaterialSource | str
-            A ``MaterialSource`` enum member or its name/value as a string.
-        name : str
-            Material name/ID as shown on the source website.
-        resolution : str
-            Normalized resolution: ``"1K"``, ``"2K"``, ``"4K"``, ``"8K"``
-            (case-insensitive). Defaults to ``"1K"``. Ignored for ``PhysicallyBased``.
-
-        Returns
-        -------
-        Material
-            Object with ``id``, ``name``, ``source``, ``url``, ``license``,
-            ``properties`` attributes.
-        """
-        src_enum = _resolve_source(source)
-        source_val = src_enum.value
-        src_info = _SOURCES[src_enum]
-        src_mod = src_info["module"]
-
-        # Map resolution (physicallybased ignores it)
-        if src_mod.RESOLUTION_MAP:
-            res_key = resolution.upper()
-            actual_res = src_mod.RESOLUTION_MAP.get(res_key)
-            if actual_res is None:
-                available = list(src_mod.RESOLUTION_MAP.keys())
-                raise ValueError(
-                    f"Resolution '{resolution}' not available for {src_enum.name}. "
-                    f"Available: {available}"
-                )
-        else:
-            actual_res = None
-
-        label = f"{src_enum.name} / {name}"
-
-        # Check cache
-        cache_file = _cache_path(source_val, name, actual_res)
-        if cache_file.exists():
-            mat = cls(json.loads(cache_file.read_text()))
-            print(f"{label}: loading from cache — License: {mat.license}")
-            return mat
-
-        # Download and convert
-        print(f"{label}: downloading ...", end=" ", flush=True)
-        if src_enum == MaterialSource.GPUOpen:
-            with tempfile.TemporaryDirectory() as tmp:
-                mtlx_path, mat_license, mat_url = src_mod.download(
-                    name, actual_res, Path(tmp)
-                )
-                print("baking ...", end=" ", flush=True)
-                properties, _ = _process_mtlx(mtlx_path)
-        else:
-            with tempfile.TemporaryDirectory() as tmp:
-                overrides = {}
-                if src_mod.RESOLUTION_MAP:
-                    mtlx_path = src_mod.download(name, actual_res, Path(tmp))
-                else:
-                    mtlx_path, overrides = src_mod.download(name, Path(tmp))
-                print("baking ...", end=" ", flush=True)
-                properties, _ = _process_mtlx(mtlx_path)
-                # Apply property overrides (e.g. thin-film thickness range)
-                for key, val in overrides.items():
-                    if key in properties:
-                        properties[key]["value"] = val
-            mat_license = src_mod.LICENSE
-            mat_url = src_mod.material_url(name)
-
-        output = {
-            "id": name,
-            "name": name,
-            "source": source_val,
-            "url": mat_url,
-            "license": mat_license,
-            "properties": properties,
-        }
-
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(json.dumps(output, indent=2))
-        print(f"saving ... done — License: {mat_license}")
-
-        return cls(output)
-
-    @classmethod
     def list_sources(cls) -> None:
         """Print available material sources with clickable URLs."""
-        width = max(len(src.name) for src in MaterialSource)
+        loaders = [cls.ambientcg, cls.gpuopen, cls.polyhaven, cls.physicallybased]
+        width = max(len(l._source) for l in loaders)
         print("Material sources:")
-        for src in MaterialSource:
-            url = _SOURCES[src]["url"]
-            label = f"Material.{src.name}"
+        for loader in loaders:
+            label = f"Material.{loader._source}"
+            url = loader._module.BROWSE_URL
             print(f"  {label:<{width + 10}}  {url}")
 
     @classmethod
@@ -367,6 +280,10 @@ class Material:
         (e.g. ``color``, ``roughness``, ``metalness``).  Each sets the
         ``value`` of that property, creating it if absent.
 
+        For ``color``, if a texture exists it is removed and replaced by
+        the solid color value.  A warning is logged so the caller knows
+        the texture was dropped.
+
         Parameters
         ----------
         repeat : tuple[float, float], optional
@@ -375,10 +292,19 @@ class Material:
             Property overrides, e.g. ``color=(0.8, 0.1, 0.2)``,
             ``roughness=0.9``.
         """
+        import warnings
+
         new_props = copy.deepcopy(self.properties)
         for key, value in props.items():
             if isinstance(value, tuple):
                 value = list(value)
+            if key == "color" and "texture" in new_props.get("color", {}):
+                del new_props["color"]["texture"]
+                warnings.warn(
+                    "color override: existing color texture removed and "
+                    "replaced by solid color value",
+                    stacklevel=2,
+                )
             new_props.setdefault(key, {})["value"] = value
         data = self.to_dict()
         data["properties"] = new_props

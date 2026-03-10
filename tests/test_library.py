@@ -9,36 +9,8 @@ import pytest
 from threejs_materials.library import (
     CACHE_DIR,
     Material,
-    MaterialSource,
     _cache_path,
-    _resolve_source,
 )
-
-
-# ---------------------------------------------------------------------------
-# _resolve_source
-# ---------------------------------------------------------------------------
-
-
-class TestResolveSource:
-    def test_enum_passthrough(self):
-        assert _resolve_source(MaterialSource.ambientCG) is MaterialSource.ambientCG
-
-    def test_string_name(self):
-        assert _resolve_source("ambientCG") is MaterialSource.ambientCG
-
-    def test_string_name_case_insensitive(self):
-        assert _resolve_source("AMBIENTCG") is MaterialSource.ambientCG
-
-    def test_string_value(self):
-        assert _resolve_source("ambientcg") is MaterialSource.ambientCG
-
-    def test_string_value_gpuopen(self):
-        assert _resolve_source("gpuopen") is MaterialSource.GPUOpen
-
-    def test_invalid_raises(self):
-        with pytest.raises(ValueError, match="Unknown source"):
-            _resolve_source("nonexistent")
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +20,7 @@ class TestResolveSource:
 
 class TestCachePath:
     def test_with_resolution(self):
-        p = _cache_path("ambientcg", "Brick Wall", "1k")
+        p = _cache_path("ambientcg", "Brick Wall", "1K")
         assert p == CACHE_DIR / "ambientcg_brick_wall_1k.json"
 
     def test_without_resolution(self):
@@ -56,7 +28,7 @@ class TestCachePath:
         assert p == CACHE_DIR / "physicallybased_gold.json"
 
     def test_name_normalization(self):
-        p = _cache_path("gpuopen", "Some Material Name", "2k")
+        p = _cache_path("gpuopen", "Some Material Name", "2K")
         assert "some_material_name" in p.name
 
 
@@ -137,6 +109,12 @@ class TestMaterial:
         assert "properties" in mat
         assert "nonexistent" not in mat
 
+    def test_source_loaders_exist(self):
+        assert repr(Material.ambientcg) == "Material.ambientcg"
+        assert repr(Material.gpuopen) == "Material.gpuopen"
+        assert repr(Material.polyhaven) == "Material.polyhaven"
+        assert repr(Material.physicallybased) == "Material.physicallybased"
+
 
 # ---------------------------------------------------------------------------
 # Material.override
@@ -193,6 +171,32 @@ class TestOverride:
         mat = Material(data)
         new = mat.override(roughness=0.1)
         assert new.properties["color"]["texture"] == "data:image/png;base64,abc"
+
+    def test_color_override_removes_texture_and_warns(self):
+        data = _sample_data()
+        data["properties"]["color"]["texture"] = "data:image/png;base64,abc"
+        mat = Material(data)
+
+        with pytest.warns(UserWarning, match="color texture removed"):
+            red = mat.override(color=(0.5, 0.0, 0.0))
+        assert red.properties["color"]["value"] == [0.5, 0.0, 0.0]
+        assert "texture" not in red.properties["color"]
+
+    def test_color_override_without_texture_sets_value(self):
+        mat = Material(_sample_data())
+        new = mat.override(color=(0.5, 0.0, 0.0))
+        assert new.properties["color"]["value"] == [0.5, 0.0, 0.0]
+        assert "texture" not in new.properties["color"]
+
+    def test_color_override_preserves_original_texture(self):
+        data = _sample_data()
+        data["properties"]["color"]["texture"] = "data:image/png;base64,abc"
+        mat = Material(data)
+
+        with pytest.warns(UserWarning):
+            mat.override(color=(0.5, 0.0, 0.0))
+        # Original must be unchanged
+        assert mat.properties["color"]["texture"] == "data:image/png;base64,abc"
 
     def test_to_dict_includes_repeat(self):
         mat = Material(_sample_data()).override(repeat=(2, 2))

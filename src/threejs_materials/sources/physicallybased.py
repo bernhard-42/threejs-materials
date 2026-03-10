@@ -1,30 +1,22 @@
-"""PhysicallyBased: fetch parametric material data and generate .mtlx.
+"""PhysicallyBased: fetch parametric material data and convert directly to Three.js properties.
 
-Generates ``open_pbr_surface`` MaterialX documents matching the logic used by
-https://github.com/AntonPalmqvist/physically-based-api/blob/main/scripts/create-materialx.mjs
+Maps PhysicallyBased API v2 data → MeshPhysicalMaterial properties without
+going through a MaterialX intermediate document.
 """
 
 import logging
 from pathlib import Path
 
-import MaterialX as mx
 import requests
+
+from threejs_materials.sources import SourceResult
 
 log = logging.getLogger(__name__)
 
 API_URL = "https://api.physicallybased.info/v2/materials"
 
 LICENSE = "CC0 1.0"
-
-RESOLUTION_MAP = {}  # no resolution needed
-
-# API keys to skip (not shader inputs).
-_SKIP = {
-    "name", "density", "densityRange", "category", "description",
-    "sources", "tags", "reference", "references", "group", "images",
-    "viscosity", "surfaceTension", "acousticAbsorption",
-    "complexIor",
-}
+BROWSE_URL = "https://physicallybased.info/"
 
 
 def _extract_color(hit: dict) -> list[float]:
@@ -61,81 +53,35 @@ def material_url(name: str) -> str:
     return "https://physicallybased.info/"
 
 
-def download(name: str, out_dir: Path) -> tuple[Path, dict]:
-    """Fetch a PhysicallyBased material and generate a .mtlx file.
-
-    Returns ``(mtlx_path, property_overrides)`` — overrides carry values
-    that can't round-trip through the .mtlx (e.g. thin-film thickness range).
-    """
+def _fetch_material_data(name: str) -> dict:
+    """Fetch material data from the PhysicallyBased API."""
     log.info("Fetching PhysicallyBased materials list (v2)")
     resp = requests.get(API_URL, timeout=10)
     resp.raise_for_status()
     body = resp.json()
     materials = body.get("data", body)
 
-    mat = None
     for m in materials:
         if m.get("name", "").lower() == name.lower():
-            mat = m
-            break
+            return m
 
-    if mat is None:
-        available = sorted(m.get("name", "") for m in materials)
-        raise RuntimeError(
-            f"PhysicallyBased: material '{name}' not found. "
-            f"Available ({len(available)}): {', '.join(available[:20])}..."
-        )
-
-    # Collect property overrides that can't round-trip through .mtlx
-    overrides = {}
-    raw_tf = mat.get("thinFilmThickness")
-    if isinstance(raw_tf, list) and len(raw_tf) >= 2:
-        overrides["iridescenceThicknessRange"] = [float(raw_tf[0]), float(raw_tf[1])]
-
-    mtlx_path = _generate_mtlx(mat, out_dir)
-    return mtlx_path, overrides
+    available = sorted(m.get("name", "") for m in materials)
+    raise RuntimeError(
+        f"PhysicallyBased: material '{name}' not found. "
+        f"Available ({len(available)}): {', '.join(available[:20])}..."
+    )
 
 
-def _set_input(shader_node, name: str, type_str: str, value):
-    """Add an input from the node def and set its value string."""
-    inp = shader_node.addInputFromNodeDef(name)
-    if not inp:
-        log.debug("Skipping unsupported input: %s", name)
-        return
-    if isinstance(value, list):
-        inp.setValueString(", ".join(f"{x:.3f}" if isinstance(x, float) else str(x) for x in value))
-    elif isinstance(value, float):
-        inp.setValueString(f"{value:.3f}" if "color" in type_str else str(value))
-    elif isinstance(value, bool):
-        inp.setValueString("true" if value else "false")
-    else:
-        inp.setValueString(str(value))
+def _to_threejs_properties(mat: dict) -> dict:
+    """Convert PhysicallyBased API data directly to Three.js MeshPhysicalMaterial properties.
 
-
-def _generate_mtlx(mat: dict, out_dir: Path) -> Path:
-    """Generate an open_pbr_surface .mtlx document from PhysicallyBased API data.
-
-    Follows the same logic as the website's create-materialx.mjs.
+    This collapses the former _generate_mtlx → to_threejs_physical(open_pbr_surface)
+    pipeline into a single step. All materials are parametric (no textures).
     """
-    mat_name = mat["name"].replace(" ", "_").replace("-", "_").replace(":", "_").replace(".", "_")
+    props: dict[str, dict] = {}
 
-    doc = mx.createDocument()
-    stdlib = mx.createDocument()
-    mx.loadLibraries(mx.getDefaultDataLibraryFolders(), mx.getDefaultDataSearchPath(), stdlib)
-    doc.importLibrary(stdlib)
-
-    # Create shader and material nodes
-    shader_name = "open_pbr_surface_surfaceshader"
-    shader_node = doc.addNode("open_pbr_surface", shader_name, mx.SURFACE_SHADER_TYPE_STRING)
-
-    material_name = doc.createValidChildName(mat_name)
-    material_node = doc.addNode(
-        mx.SURFACE_MATERIAL_NODE_STRING, material_name, mx.MATERIAL_TYPE_STRING
-    )
-    shader_input = material_node.addInput(
-        mx.SURFACE_SHADER_TYPE_STRING, mx.SURFACE_SHADER_TYPE_STRING
-    )
-    shader_input.setAttribute("nodename", shader_node.getName())
+    def val(name, value):
+        props.setdefault(name, {})["value"] = value
 
     color = _extract_color(mat)
     metalness = mat.get("metalness", 0)
@@ -144,84 +90,86 @@ def _generate_mtlx(mat: dict, out_dir: Path) -> Path:
     transmission = mat.get("transmission")
     subsurface_radius = mat.get("subsurfaceRadius")
 
-    # base_color — only when not default AND not transmission AND not subsurface
-    if color != [0.8, 0.8, 0.8] and not transmission and not subsurface_radius:
-        _set_input(shader_node, "base_color", "color3", color)
+    # color — skip when transmission or subsurface is active
+    # (transmissive materials use attenuationColor instead;
+    #  Three.js has no SSS so subsurface color has no target)
+    if not transmission and not subsurface_radius:
+        val("color", color)
 
-    # base_metalness
+    # metalness — skip default 0
     if metalness > 0:
-        _set_input(shader_node, "base_metalness", "float", float(metalness))
+        val("metalness", float(metalness))
 
-    # specular_color (F82 format)
+    # roughness — skip default 0.3
+    if roughness != 0.3:
+        val("roughness", float(roughness))
+
+    # specularColor (F82 format) + specularIntensity
     spec_color = _extract_f82_specular_color(mat)
     if spec_color:
-        _set_input(shader_node, "specular_color", "color3", spec_color)
+        val("specularIntensity", 1.0)
+        val("specularColor", spec_color)
 
-    # specular_roughness — only when not default 0.3
-    if roughness != 0.3:
-        _set_input(shader_node, "specular_roughness", "float", float(roughness))
-
-    # specular_ior — only for non-metals and non-default
+    # ior — skip default 1.5 and pure metals
     if ior and metalness < 1 and ior != 1.5:
-        _set_input(shader_node, "specular_ior", "float", float(ior))
+        val("ior", float(ior))
 
     # transmission
     if transmission:
-        _set_input(shader_node, "transmission_weight", "float", float(transmission))
+        val("transmission", float(transmission))
 
-        # transmission_color = base color when color is not white
+        # attenuationColor from the base color (when not white)
         if color != [1, 1, 1]:
-            _set_input(shader_node, "transmission_color", "color3", color)
+            val("attenuationColor", color)
 
-        # transmission_depth
+        # attenuationDistance from transmissionDepth
         tx_depth = mat.get("transmissionDepth")
         if tx_depth:
-            _set_input(shader_node, "transmission_depth", "float", float(tx_depth))
+            val("attenuationDistance", float(tx_depth))
 
-        # transmission_dispersion
+        # dispersion: Abbe number → Three.js dispersion (= 20 / V_d)
         tx_disp = mat.get("transmissionDispersion")
-        if tx_disp:
-            _set_input(shader_node, "transmission_dispersion_scale", "float", 1.0)
-            _set_input(shader_node, "transmission_dispersion_abbe_number", "float", float(tx_disp))
+        if tx_disp and tx_disp > 0:
+            val("dispersion", 20.0 / tx_disp)
 
-    # subsurface
-    if subsurface_radius:
-        _set_input(shader_node, "subsurface_weight", "float", 1.0)
-        _set_input(shader_node, "subsurface_color", "color3", color)
-        # subsurface_radius_scale is a float in OpenPBR; use the average
-        # of the RGB radius values from the API as a scalar approximation.
-        if isinstance(subsurface_radius, list):
-            avg_radius = sum(subsurface_radius) / len(subsurface_radius)
-        else:
-            avg_radius = float(subsurface_radius)
-        _set_input(shader_node, "subsurface_radius_scale", "float", avg_radius)
-
-    # thin film
+    # thin film → iridescence
     tf_thickness = mat.get("thinFilmThickness")
     if tf_thickness:
-        _set_input(shader_node, "thin_film_weight", "float", 1.0)
-        # nm → μm (divide by 1000); use typical [2] if available, else [0]
+        val("iridescence", 1.0)
+
+        # Thickness is in nm; Three.js also expects nm.
+        # (The old pipeline did nm÷1000→μm then μm×1000→nm — a no-op.)
         if isinstance(tf_thickness, list):
             nm = tf_thickness[2] if len(tf_thickness) > 2 else tf_thickness[0]
         else:
             nm = tf_thickness
-        _set_input(shader_node, "thin_film_thickness", "float", nm / 1000)
+        val("iridescenceThicknessRange", [0.0, float(nm)])
 
         tf_ior = mat.get("thinFilmIor")
         if tf_ior:
-            _set_input(shader_node, "thin_film_ior", "float", float(tf_ior))
+            val("iridescenceIOR", float(tf_ior))
 
-        # thin walled when both thin film and transmission
+        # thin film + transmission → render both sides
         if transmission:
-            _set_input(shader_node, "geometry_thin_walled", "boolean", True)
+            val("side", 2)  # THREE.DoubleSide
 
-    # Write without library elements
-    out_dir.mkdir(parents=True, exist_ok=True)
-    mtlx_path = out_dir / "material.mtlx"
+    return props
 
-    write_options = mx.XmlWriteOptions()
-    write_options.writeXIncludeEnable = False
-    write_options.elementPredicate = lambda elem: not elem.hasSourceUri()
-    mx.writeToXmlFile(doc, str(mtlx_path), write_options)
 
-    return mtlx_path
+def fetch(name: str, resolution: str | None, out_dir: Path) -> SourceResult:
+    """Fetch a PhysicallyBased material and convert directly to Three.js properties."""
+    mat = _fetch_material_data(name)
+    properties = _to_threejs_properties(mat)
+
+    # Collect property overrides (thin-film thickness range from list values)
+    overrides = {}
+    raw_tf = mat.get("thinFilmThickness")
+    if isinstance(raw_tf, list) and len(raw_tf) >= 2:
+        overrides["iridescenceThicknessRange"] = [float(raw_tf[0]), float(raw_tf[1])]
+
+    return SourceResult(
+        properties=properties,
+        license=LICENSE,
+        url=material_url(name),
+        overrides=overrides,
+    )

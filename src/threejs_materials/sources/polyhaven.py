@@ -5,14 +5,14 @@ from pathlib import Path
 
 import requests
 
+from threejs_materials.sources import SourceResult
+
 log = logging.getLogger(__name__)
 
 LICENSE = "CC0 1.0"
+BROWSE_URL = "https://polyhaven.com/textures"
 
-def material_url(name: str) -> str:
-    return f"https://polyhaven.com/a/{name.replace(' ', '_').lower()}"
-
-RESOLUTION_MAP = {
+_RESOLUTION_MAP = {
     "1K": "1k",
     "2K": "2k",
     "4K": "4k",
@@ -22,14 +22,17 @@ RESOLUTION_MAP = {
 _HEADERS = {"User-Agent": "MTLX_Polyaven_Loader/1.0"}
 
 
-def download(name: str, resolution: str, out_dir: Path) -> Path:
+def material_url(name: str) -> str:
+    return f"https://polyhaven.com/a/{name.replace(' ', '_').lower()}"
+
+
+def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
     """Download a PolyHaven material (.mtlx + textures).
 
     *name* is the asset slug (e.g. ``"plank_flooring_04"``).
-    *resolution* is the already-mapped value from RESOLUTION_MAP (e.g. ``"1k"``).
-
-    Returns the path to the downloaded ``.mtlx`` file.
+    *resolution* is a normalized key: ``"1K"``, ``"2K"``, ``"4K"``, or ``"8K"``.
     """
+    resolution = _RESOLUTION_MAP.get(resolution.upper(), resolution.lower())
     name = name.replace(" ", "_").lower()
 
     # Fetch file listing for this asset
@@ -80,4 +83,4 @@ def download(name: str, resolution: str, out_dir: Path) -> Path:
         dst = tex_dir / tex_name
         dst.write_bytes(tex_resp.content)
 
-    return mtlx_path
+    return SourceResult(mtlx_path=mtlx_path, license=LICENSE, url=material_url(name))

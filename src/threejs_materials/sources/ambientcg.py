@@ -7,14 +7,14 @@ from pathlib import Path
 
 import requests
 
+from threejs_materials.sources import SourceResult
+
 log = logging.getLogger(__name__)
 
 LICENSE = "CC0 1.0"
+BROWSE_URL = "https://ambientcg.com/list?type=material"
 
-def material_url(name: str) -> str:
-    return f"https://ambientcg.com/view?id={name}"
-
-RESOLUTION_MAP = {
+_RESOLUTION_MAP = {
     "1K": "1K-PNG",
     "2K": "2K-PNG",
     "4K": "4K-PNG",
@@ -22,15 +22,23 @@ RESOLUTION_MAP = {
 }
 
 
-def download(name: str, resolution: str, out_dir: Path) -> Path:
+def material_url(name: str) -> str:
+    return f"https://ambientcg.com/view?id={name}"
+
+
+def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
     """Download an ambientCG material ZIP and extract .mtlx + textures.
 
     *name* is the assetId (e.g. ``"Onyx015"``).
-    *resolution* is the already-mapped value from RESOLUTION_MAP (e.g. ``"1K-PNG"``).
-
-    Returns the path to the extracted ``.mtlx`` file.
+    *resolution* is a normalized key: ``"1K"``, ``"2K"``, ``"4K"``, or ``"8K"``.
     """
-    url = f"https://ambientCG.com/get?file={name}_{resolution}.zip"
+    res = _RESOLUTION_MAP.get(resolution.upper())
+    if res is None:
+        raise ValueError(
+            f"Resolution '{resolution}' not available for ambientCG. "
+            f"Available: {list(_RESOLUTION_MAP)}"
+        )
+    url = f"https://ambientCG.com/get?file={name}_{res}.zip"
     log.info("Downloading ambientCG: %s", url)
     resp = requests.get(url, timeout=120)
     resp.raise_for_status()
@@ -52,4 +60,4 @@ def download(name: str, resolution: str, out_dir: Path) -> Path:
     if not mtlx_path or not mtlx_path.exists():
         raise RuntimeError(f"No .mtlx found in ambientCG ZIP for {name}")
 
-    return mtlx_path
+    return SourceResult(mtlx_path=mtlx_path, license=LICENSE, url=material_url(name))

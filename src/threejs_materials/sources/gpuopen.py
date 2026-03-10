@@ -7,13 +7,16 @@ from pathlib import Path
 
 import requests
 
+from threejs_materials.sources import SourceResult
+
 log = logging.getLogger(__name__)
 
 API_BASE = "https://api.matlib.gpuopen.com/api"
 
 LICENSE = None  # per-material, fetched from API
+BROWSE_URL = "https://matlib.gpuopen.com/main/materials/all"
 
-RESOLUTION_MAP = {
+_RESOLUTION_MAP = {
     "1K": "1k 8b",
     "2K": "2k 8b",
     "4K": "4k 8b",
@@ -25,14 +28,14 @@ def material_url(name: str, material_id: str = "") -> str:
         return f"https://matlib.gpuopen.com/main/materials/all?id={material_id}"
     return "https://matlib.gpuopen.com/main/materials/all"
 
-def download(name: str, resolution: str, out_dir: Path) -> tuple[Path, str, str]:
+
+def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
     """Download a GPUOpen material ZIP and extract .mtlx + textures.
 
     *name* is the material title (e.g. ``"Car Paint"``).
-    *resolution* is the already-mapped label from RESOLUTION_MAP (e.g. ``"1k 8b"``).
-
-    Returns ``(mtlx_path, license, url)`` tuple.
+    *resolution* is a normalized key: ``"1K"``, ``"2K"``, or ``"4K"``.
     """
+    resolution = _RESOLUTION_MAP.get(resolution.upper(), resolution)
     # Search for the material by name
     log.info("Searching GPUOpen for '%s'", name)
     resp = requests.get(
@@ -92,7 +95,7 @@ def download(name: str, resolution: str, out_dir: Path) -> tuple[Path, str, str]
     if not mtlx_path or not mtlx_path.exists():
         raise RuntimeError(f"No .mtlx found in GPUOpen ZIP for '{name}'")
 
-    return mtlx_path, mat_license, mat_url
+    return SourceResult(mtlx_path=mtlx_path, license=mat_license, url=mat_url)
 
 
 def _find_package(package_uuids: list[str], resolution: str) -> str:
