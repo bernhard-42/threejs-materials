@@ -6,12 +6,12 @@ The primary input format is [MaterialX](https://materialx.org/) — the library 
 
 <table>
 <tr>
-<td align="center"><strong>CAD mode</strong> (<code>interpolate_color()</code>)</td>
 <td align="center"><strong>Studio mode</strong> (full PBR)</td>
+<td align="center"><strong>CAD mode</strong> (<code>interpolate_color()</code>)</td>
 </tr>
 <tr>
-<td><img src="screenshots/CAD mode.png" width="400"></td>
 <td><img src="screenshots/Studio mode.png" width="400"></td>
+<td><img src="screenshots/CAD mode.png" width="400"></td>
 </tr>
 </table>
 
@@ -78,42 +78,42 @@ Parametric materials (PhysicallyBased) have values only:
 
 Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 
-| Output property | `value` → | `texture` → |
-| --- | --- | --- |
-| `color` | `color` | `map` |
-| `metalness` | `metalness` | `metalnessMap` |
-| `roughness` | `roughness` | `roughnessMap` |
-| `normal` | — | `normalMap` |
-| `normalScale` | `normalScale` | — |
-| `ao` | — | `aoMap` |
-| `emissive` | `emissive` | `emissiveMap` |
-| `emissiveIntensity` | `emissiveIntensity` | — |
-| `ior` | `ior` | — |
-| `transmission` | `transmission` | `transmissionMap` |
-| `thickness` | `thickness` | `thicknessMap` |
-| `attenuationColor` | `attenuationColor` | — |
-| `attenuationDistance` | `attenuationDistance` | — |
-| `clearcoat` | `clearcoat` | `clearcoatMap` |
-| `clearcoatRoughness` | `clearcoatRoughness` | — |
-| `clearcoatNormal` | — | `clearcoatNormalMap` |
-| `sheen` | `sheen` | — |
-| `sheenColor` | `sheenColor` | `sheenColorMap` |
-| `sheenRoughness` | `sheenRoughness` | — |
-| `iridescence` | `iridescence` | `iridescenceMap` |
-| `iridescenceIOR` | `iridescenceIOR` | — |
-| `iridescenceThicknessRange` | `iridescenceThicknessRange` | — |
-| `anisotropy` | `anisotropy` | — |
-| `anisotropyRotation` | `anisotropyRotation` | — |
-| `specularIntensity` | `specularIntensity` | `specularIntensityMap` |
-| `specularColor` | `specularColor` | `specularColorMap` |
-| `opacity` | `opacity` | `alphaMap` |
-| `transparent` | `transparent` | — |
-| `alphaTest` | `alphaTest` | — |
-| `dispersion` | `dispersion` | — |
-| `displacement` | — | `displacementMap` |
-| `displacementScale` | `displacementScale` | — |
-| `side` | `side` | — |
-| `metallicRoughness` | — | `metalnessMap` + `roughnessMap` (G=roughness, B=metalness) |
+| Output property             | `value` →                   | `texture` →                                                |
+| --------------------------- | --------------------------- | ---------------------------------------------------------- |
+| `color`                     | `color`                     | `map`                                                      |
+| `metalness`                 | `metalness`                 | `metalnessMap`                                             |
+| `roughness`                 | `roughness`                 | `roughnessMap`                                             |
+| `normal`                    | —                           | `normalMap`                                                |
+| `normalScale`               | `normalScale`               | —                                                          |
+| `ao`                        | —                           | `aoMap`                                                    |
+| `emissive`                  | `emissive`                  | `emissiveMap`                                              |
+| `emissiveIntensity`         | `emissiveIntensity`         | —                                                          |
+| `ior`                       | `ior`                       | —                                                          |
+| `transmission`              | `transmission`              | `transmissionMap`                                          |
+| `thickness`                 | `thickness`                 | `thicknessMap`                                             |
+| `attenuationColor`          | `attenuationColor`          | —                                                          |
+| `attenuationDistance`       | `attenuationDistance`       | —                                                          |
+| `clearcoat`                 | `clearcoat`                 | `clearcoatMap`                                             |
+| `clearcoatRoughness`        | `clearcoatRoughness`        | —                                                          |
+| `clearcoatNormal`           | —                           | `clearcoatNormalMap`                                       |
+| `sheen`                     | `sheen`                     | —                                                          |
+| `sheenColor`                | `sheenColor`                | `sheenColorMap`                                            |
+| `sheenRoughness`            | `sheenRoughness`            | —                                                          |
+| `iridescence`               | `iridescence`               | `iridescenceMap`                                           |
+| `iridescenceIOR`            | `iridescenceIOR`            | —                                                          |
+| `iridescenceThicknessRange` | `iridescenceThicknessRange` | —                                                          |
+| `anisotropy`                | `anisotropy`                | —                                                          |
+| `anisotropyRotation`        | `anisotropyRotation`        | —                                                          |
+| `specularIntensity`         | `specularIntensity`         | `specularIntensityMap`                                     |
+| `specularColor`             | `specularColor`             | `specularColorMap`                                         |
+| `opacity`                   | `opacity`                   | `alphaMap`                                                 |
+| `transparent`               | `transparent`               | —                                                          |
+| `alphaTest`                 | `alphaTest`                 | —                                                          |
+| `dispersion`                | `dispersion`                | —                                                          |
+| `displacement`              | —                           | `displacementMap`                                          |
+| `displacementScale`         | `displacementScale`         | —                                                          |
+| `side`                      | `side`                      | —                                                          |
+| `metallicRoughness`         | —                           | `metalnessMap` + `roughnessMap` (G=roughness, B=metalness) |
 
 ## Common API
 
@@ -284,26 +284,26 @@ To force re-conversion, delete the cached file and call `.load()` again.
 
 Supported models: `standard_surface`, `gltf_pbr`, `open_pbr_surface`. Other models produce empty output with a logged warning.
 
-| Feature | standard_surface | gltf_pbr | open_pbr_surface |
-| --- | --- | --- | --- |
-| Base color | Yes | Yes | Yes |
-| Metalness | Yes | Yes | Yes |
-| Roughness | Yes | Yes | Yes |
-| Normal map | Yes | Yes | Yes |
-| Specular | Yes (weight, color, IOR) | Yes (weight, color, IOR) | Yes (weight, color, IOR) |
-| Transmission | Yes | Yes (+ attenuation) | Yes (+ attenuation) |
-| Emission | Yes | Yes | Yes |
-| Clearcoat | Yes | Yes | Yes |
-| Clearcoat normal | Yes | Yes | Yes |
-| Sheen | Yes | Yes | Yes (fuzz) |
-| Iridescence | Yes | Yes | Yes |
-| Anisotropy | Yes (scalar — no Three.js strength map) | Yes | Yes |
-| Opacity | Yes | Yes (alpha/alpha_mode) | Yes (geometry_opacity) |
-| Displacement | Yes (model-independent) | Yes | Yes |
-| Dispersion | No | Yes | Yes |
-| Normal scale | No (baked into texture) | Yes | No (baked into texture) |
-| Thin-walled | No | No | Yes (→ DoubleSide) |
-| Subsurface | No | No | No |
+| Feature          | standard_surface                        | gltf_pbr                 | open_pbr_surface         |
+| ---------------- | --------------------------------------- | ------------------------ | ------------------------ |
+| Base color       | Yes                                     | Yes                      | Yes                      |
+| Metalness        | Yes                                     | Yes                      | Yes                      |
+| Roughness        | Yes                                     | Yes                      | Yes                      |
+| Normal map       | Yes                                     | Yes                      | Yes                      |
+| Specular         | Yes (weight, color, IOR)                | Yes (weight, color, IOR) | Yes (weight, color, IOR) |
+| Transmission     | Yes                                     | Yes (+ attenuation)      | Yes (+ attenuation)      |
+| Emission         | Yes                                     | Yes                      | Yes                      |
+| Clearcoat        | Yes                                     | Yes                      | Yes                      |
+| Clearcoat normal | Yes                                     | Yes                      | Yes                      |
+| Sheen            | Yes                                     | Yes                      | Yes (fuzz)               |
+| Iridescence      | Yes                                     | Yes                      | Yes                      |
+| Anisotropy       | Yes (scalar — no Three.js strength map) | Yes                      | Yes                      |
+| Opacity          | Yes                                     | Yes (alpha/alpha_mode)   | Yes (geometry_opacity)   |
+| Displacement     | Yes (model-independent)                 | Yes                      | Yes                      |
+| Dispersion       | No                                      | Yes                      | Yes                      |
+| Normal scale     | No (baked into texture)                 | Yes                      | No (baked into texture)  |
+| Thin-walled      | No                                      | No                       | Yes (→ DoubleSide)       |
+| Subsurface       | No                                      | No                       | No                       |
 
 Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no SSS support.
 
@@ -360,21 +360,21 @@ Textures are resolved relative to the file location. USDZ archives with embedded
 
 ### UsdPreviewSurface input mapping
 
-| UsdPreviewSurface input | Output property | Notes |
-| --- | --- | --- |
-| `diffuseColor` | `color` | value + texture |
-| `metallic` | `metalness` | value + texture |
-| `roughness` | `roughness` | value + texture |
-| `normal` | `normal` | texture only |
-| `emissiveColor` | `emissive` | value + texture |
-| `clearcoat` | `clearcoat` | value only |
-| `clearcoatRoughness` | `clearcoatRoughness` | value only |
-| `ior` | `ior` | value only |
-| `occlusion` | `ao` | texture only |
-| `displacement` | `displacement` | texture only |
-| `opacity` | `opacity` | + `transparent: true` if < 1 |
-| `opacityThreshold` | `alphaTest` | mask/cutout mode |
-| `specularColor` | `specularColor` | only if `useSpecularWorkflow == 1` |
+| UsdPreviewSurface input | Output property      | Notes                              |
+| ----------------------- | -------------------- | ---------------------------------- |
+| `diffuseColor`          | `color`              | value + texture                    |
+| `metallic`              | `metalness`          | value + texture                    |
+| `roughness`             | `roughness`          | value + texture                    |
+| `normal`                | `normal`             | texture only                       |
+| `emissiveColor`         | `emissive`           | value + texture                    |
+| `clearcoat`             | `clearcoat`          | value only                         |
+| `clearcoatRoughness`    | `clearcoatRoughness` | value only                         |
+| `ior`                   | `ior`                | value only                         |
+| `occlusion`             | `ao`                 | texture only                       |
+| `displacement`          | `displacement`       | texture only                       |
+| `opacity`               | `opacity`            | + `transparent: true` if < 1       |
+| `opacityThreshold`      | `alphaTest`          | mask/cutout mode                   |
+| `specularColor`         | `specularColor`      | only if `useSpecularWorkflow == 1` |
 
 Inputs at their UsdPreviewSurface default value are omitted from the output.
 
