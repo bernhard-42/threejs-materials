@@ -89,4 +89,23 @@ for key, prop in mat.properties.items():
         parts.append(f"texture=({len(prop['texture'])} chars)")
     print(f"     {key}: {', '.join(parts)}")
 
+# ── 4) Load a local .usdc file ──────────────────────────────────────────
+
+print()
+print("=" * 60)
+print("4) Load a local .usdc file")
+print("=" * 60)
+
+mat_usd = Material.from_usd("examples/car-paint.usdc")
+print(f"   name:     {mat_usd.name}")
+for key, prop in mat_usd.properties.items():
+    has_val = "value" in prop
+    has_tex = "texture" in prop
+    parts = []
+    if has_val:
+        parts.append(f"value={prop['value']}")
+    if has_tex:
+        parts.append(f"texture=({len(prop['texture'])} chars)")
+    print(f"     {key}: {', '.join(parts)}")
+
 print("\nDone.")
