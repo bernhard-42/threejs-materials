@@ -39,10 +39,12 @@ release:
 	git tag -a v$(CURRENT_VERSION) -m "Latest release: $(CURRENT_VERSION)"
 
 create-release:
-	@github-release release -u bernhard-42 -r threejs-materials -t v$(CURRENT_VERSION) -n threejs_materials-$(CURRENT_VERSION)
-	@sleep 2
-	@github-release upload  -u bernhard-42 -r threejs-materials -t v$(CURRENT_VERSION) -n threejs_materials-$(CURRENT_VERSION).tar.gz -f dist/threejs_materials-$(CURRENT_VERSION).tar.gz
-	@github-release upload  -u bernhard-42 -r threejs-materials -t v$(CURRENT_VERSION) -n threejs_materials-$(CURRENT_VERSION)-py3-none-any.whl -f dist/threejs_materials-$(CURRENT_VERSION)-py3-none-any.whl
+	@gh release create v$(CURRENT_VERSION) \
+		dist/threejs_materials-$(CURRENT_VERSION).tar.gz \
+		dist/threejs_materials-$(CURRENT_VERSION)-py3-none-any.whl \
+		--title "threejs_materials-$(CURRENT_VERSION)" \
+		--notes "v$(CURRENT_VERSION)" \
+		--target main
 
 install: dist
 	@echo "=> Installing threejs-materials"
