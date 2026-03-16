@@ -64,6 +64,17 @@ def _average_texture_linear(data_uri: str) -> tuple[float, float, float]:
 
 
 
+def _parse_color_string(color: str) -> tuple[float, float, float]:
+    """Parse a CSS color name or hex string to linear RGB (0-1).
+
+    Supports ``#rgb``, ``#rrggbb``, and CSS named colors (same set as Three.js).
+    """
+    from PIL import ImageColor
+
+    r, g, b = ImageColor.getrgb(color)
+    return (_srgb_to_linear(r / 255.0), _srgb_to_linear(g / 255.0), _srgb_to_linear(b / 255.0))
+
+
 class _SourceLoader:
     """Proxy providing ``.load()`` for a specific material source."""
 
@@ -367,10 +378,19 @@ class Material:
         color_prop = props.get("color", {})
 
         # --- Color ---
-        if "texture" in color_prop:
-            r, g, b = _average_texture_linear(color_prop["texture"])
-        elif "value" in color_prop and isinstance(color_prop["value"], list):
-            r, g, b = color_prop["value"][:3]
+        # Three.js multiplies color × map texture, so when both exist we
+        # multiply the scalar value by the average texture color.
+        color_val = color_prop.get("value")
+        if isinstance(color_val, str):
+            r, g, b = _parse_color_string(color_val)
+        elif "texture" in color_prop:
+            tr, tg, tb = _average_texture_linear(color_prop["texture"])
+            if isinstance(color_val, list):
+                r, g, b = color_val[0] * tr, color_val[1] * tg, color_val[2] * tb
+            else:
+                r, g, b = tr, tg, tb
+        elif isinstance(color_val, list):
+            r, g, b = color_val[:3]
         else:
             r, g, b = 0.5, 0.5, 0.5
 
