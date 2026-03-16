@@ -284,27 +284,58 @@ class Material:
             }
         )
 
-    def override(self, *, repeat=None, **props) -> "Material":
-        """Return a new Material with property and/or texture repeat overrides.
+    def override(
+        self,
+        *,
+        color=None,
+        roughness=None,
+        metalness=None,
+        ior=None,
+        transmission=None,
+        opacity=None,
+        clearcoat=None,
+        clearcoatRoughness=None,
+        sheen=None,
+        sheenColor=None,
+        sheenRoughness=None,
+        anisotropy=None,
+        anisotropyRotation=None,
+        specularIntensity=None,
+        emissionColor=None,
+        emissionIntensity=None,
+        attenuationColor=None,
+        attenuationDistance=None,
+        thickness=None,
+        thinFilmThickness=None,
+    ) -> "Material":
+        """Return a new Material with property overrides.
 
-        Keyword arguments correspond to property names in ``properties``
-        (e.g. ``color``, ``roughness``, ``metalness``).  Each sets the
-        ``value`` of that property, creating it if absent.
+        Each parameter sets the ``value`` of the corresponding property,
+        creating it if absent.
 
         For ``color``, if a texture exists it is removed and replaced by
         the solid color value.  A warning is logged so the caller knows
         the texture was dropped.
-
-        Parameters
-        ----------
-        repeat : tuple[float, float], optional
-            Texture tiling ``(u, v)``, e.g. ``(3, 3)``.
-        **props
-            Property overrides, e.g. ``color=(0.8, 0.1, 0.2)``,
-            ``roughness=0.9``.
         """
         import warnings
 
+        props = {
+            k: v
+            for k, v in {
+                "color": color, "roughness": roughness, "metalness": metalness,
+                "ior": ior, "transmission": transmission, "opacity": opacity,
+                "clearcoat": clearcoat, "clearcoatRoughness": clearcoatRoughness,
+                "sheen": sheen, "sheenColor": sheenColor,
+                "sheenRoughness": sheenRoughness, "anisotropy": anisotropy,
+                "anisotropyRotation": anisotropyRotation,
+                "specularIntensity": specularIntensity,
+                "emissionColor": emissionColor, "emissionIntensity": emissionIntensity,
+                "attenuationColor": attenuationColor,
+                "attenuationDistance": attenuationDistance,
+                "thickness": thickness, "thinFilmThickness": thinFilmThickness,
+            }.items()
+            if v is not None
+        }
         new_props = copy.deepcopy(self.properties)
         for key, value in props.items():
             if isinstance(value, tuple):
@@ -319,9 +350,21 @@ class Material:
             new_props.setdefault(key, {})["value"] = value
         data = self.to_dict()
         data["properties"] = new_props
-        data["texture_repeat"] = (
-            tuple(repeat) if repeat is not None else self.texture_repeat
-        )
+        return Material(data)
+
+    def scale(self, u: float, v: float) -> "Material":
+        """Return a new Material with texture scale applied.
+
+        ``scale(2, 2)`` makes the texture appear 2x larger, which
+        corresponds to ``textureRepeat = (0.5, 0.5)`` in Three.js.
+
+        Parameters
+        ----------
+        u, v : float
+            Scale factors for the U and V axes.
+        """
+        data = self.to_dict()
+        data["texture_repeat"] = (1.0 / u, 1.0 / v)
         return Material(data)
 
     def to_dict(self) -> dict:

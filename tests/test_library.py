@@ -129,10 +129,15 @@ class TestOverride:
         # original unchanged
         assert mat.properties["color"]["value"] == [1.0, 0.0, 0.0]
 
-    def test_repeat_override(self):
+    def test_scale(self):
         mat = Material(_sample_data())
-        new = mat.override(repeat=(3, 3))
-        assert new.texture_repeat == (3, 3)
+        new = mat.scale(2, 2)
+        assert new.texture_repeat == (0.5, 0.5)
+
+    def test_scale_asymmetric(self):
+        mat = Material(_sample_data())
+        new = mat.scale(4, 2)
+        assert new.texture_repeat == (0.25, 0.5)
 
     def test_any_property(self):
         mat = Material(_sample_data())
@@ -148,16 +153,16 @@ class TestOverride:
 
     def test_multiple_properties(self):
         mat = Material(_sample_data())
-        new = mat.override(color=(0.5, 0.5, 0.5), roughness=0.2, repeat=(2, 4))
+        new = mat.override(color=(0.5, 0.5, 0.5), roughness=0.2).scale(2, 4)
         assert new.properties["color"]["value"] == [0.5, 0.5, 0.5]
         assert new.properties["roughness"]["value"] == 0.2
-        assert new.texture_repeat == (2, 4)
+        assert new.texture_repeat == (0.5, 0.25)
 
     def test_fluent_chaining(self):
         mat = Material(_sample_data())
-        new = mat.override(color=(0.1, 0.2, 0.3)).override(repeat=(5, 5))
+        new = mat.override(color=(0.1, 0.2, 0.3)).scale(5, 5)
         assert new.properties["color"]["value"] == [0.1, 0.2, 0.3]
-        assert new.texture_repeat == (5, 5)
+        assert new.texture_repeat == (0.2, 0.2)
 
     def test_fluent_chaining_properties(self):
         mat = Material(_sample_data())
@@ -199,9 +204,9 @@ class TestOverride:
         assert mat.properties["color"]["texture"] == "data:image/png;base64,abc"
 
     def test_to_dict_includes_repeat(self):
-        mat = Material(_sample_data()).override(repeat=(2, 2))
+        mat = Material(_sample_data()).scale(2, 2)
         d = mat.to_dict()
-        assert d["textureRepeat"] == [2, 2]
+        assert d["textureRepeat"] == [0.5, 0.5]
 
     def test_to_dict_reflects_property_override(self):
         mat = Material(_sample_data()).override(color=(1, 0, 0))
