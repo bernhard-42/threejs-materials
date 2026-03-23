@@ -47,9 +47,108 @@ This installs `usd-core` for `Material.from_usd()`.
 
 **Note** `usd-core` may not support the latest Python version as binary package. It will try to compile it during installation.
 
+## Input: MaterialX
+
+### Sources
+
+| Source                                                   | Type                     | Shader model       |
+| -------------------------------------------------------- | ------------------------ | ------------------ |
+| [ambientCG](https://ambientcg.com/)                      | Texture-based            | `open_pbr_surface` |
+| [GPUOpen MaterialX Library](https://matlib.gpuopen.com/) | Procedural (baked)       | `standard_surface` |
+| [PolyHaven](https://polyhaven.com/)                      | Texture-based            | `standard_surface` |
+| [PhysicallyBased](https://physicallybased.info/)         | Parametric (no textures) | `open_pbr_surface` |
+
+Browse materials on the source websites, then load them by name.
+
+### Conversion pipeline
+
+When a material is loaded:
+
+1. **Download** — source-specific: fetch ZIP (ambientCG, GPUOpen), individual files (PolyHaven), or generate from parameters (PhysicallyBased)
+2. **Bake** — run MaterialX `TextureBaker` (GLSL preferred, MSL fallback on macOS) to flatten procedural graphs into texture images
+3. **Fallback merge** — if the baker can't handle certain textures, merge from the original document
+4. **EXR to PNG** — convert any EXR textures to 8-bit PNG
+5. **Extract** — map shader inputs to `MeshPhysicalMaterial` properties with base64-encoded textures
+6. **Cache** — write JSON to `~/.materialx-cache/`
+
+### Cache
+
+Converted materials are cached as flat JSON files in `~/.materialx-cache/` in the internal [Three.js format](#threejs-internal-format):
+
+```
+~/.materialx-cache/
+    gpuopen_car_paint_1k_8b.json
+    ambientcg_onyx015_1k-png.json
+    polyhaven_plank_flooring_04_1k.json
+    physicallybased_titanium.json
+```
+
+To force re-conversion, delete the cached file and call `.load()` again.
+
+### Shader model coverage
+
+Supported models: `standard_surface`, `gltf_pbr`, `open_pbr_surface`. Other models produce empty output with a logged warning.
+
+| Feature          | standard_surface                        | gltf_pbr                 | open_pbr_surface         |
+| ---------------- | --------------------------------------- | ------------------------ | ------------------------ |
+| Base color       | Yes                                     | Yes                      | Yes                      |
+| Metalness        | Yes                                     | Yes                      | Yes                      |
+| Roughness        | Yes                                     | Yes                      | Yes                      |
+| Normal map       | Yes                                     | Yes                      | Yes                      |
+| Specular         | Yes (weight, color, IOR)                | Yes (weight, color, IOR) | Yes (weight, color, IOR) |
+| Transmission     | Yes                                     | Yes (+ attenuation)      | Yes (+ attenuation)      |
+| Emission         | Yes                                     | Yes                      | Yes                      |
+| Clearcoat        | Yes                                     | Yes                      | Yes                      |
+| Clearcoat normal | Yes                                     | Yes                      | Yes                      |
+| Sheen            | Yes                                     | Yes                      | Yes (fuzz)               |
+| Iridescence      | Yes                                     | Yes                      | Yes                      |
+| Anisotropy       | Yes (scalar — no Three.js strength map) | Yes                      | Yes                      |
+| Opacity          | Yes                                     | Yes (alpha/alpha_mode)   | Yes (geometry_opacity)   |
+| Displacement     | Yes (model-independent)                 | Yes                      | Yes                      |
+| Dispersion       | No                                      | Yes                      | Yes                      |
+| Normal scale     | No (baked into texture)                 | Yes                      | No (baked into texture)  |
+| Thin-walled      | No                                      | No                       | Yes (→ DoubleSide)       |
+| Subsurface       | No                                      | No                       | No                       |
+
+Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no SSS support.
+
+### MaterialX limitations
+
+- Materials
+
+    - **Single material per document** — only the first material is used when a `.mtlx` file contains multiple materials. A warning is logged.
+    - **First shader node** — if a material has multiple shader nodes (e.g. surface + volume), only the first surface shader is extracted.
+
+- Baking
+
+    - **8-bit textures** — the TextureBaker uses `UINT8` output. HDR information (emissive, HDR environment lighting baked into textures) is clamped to [0,1]. This is acceptable for web preview but lossy for physically accurate emissive maps.
+    - **Global bake lock** — baking operations are serialized via a `threading.Lock` because the MaterialX baker requires `os.chdir`. This is thread-safe but becomes a bottleneck under concurrent load. The lock is per-process only (`threading.Lock`, not `multiprocessing.Lock`).
+    - **Geometry-dependent nodes** — procedurals driven by `<position>`, `<normal>`, or `<tangent>` cannot be baked (the baker renders on a flat UV quad with no 3D geometry).
+
+- Image tracing
+
+    - **Single upstream image** — `find_upstream_image` returns the first image node found when walking upstream. Complex graphs with multiple images (layered blends, channel packing before baking) will only capture one image. After baking, this is fine since the baker flattens everything to single `<image>` nodes.
+    - **No channel extraction tracking** — when an image passes through `extract` or `swizzle` nodes, the specific channel being used is not recorded. The consumer must know glTF metallicRoughness packing conventions (G=roughness, B=metalness).
+
+- EXR conversion
+
+    - **LDR clamp** — EXR textures are clamped to [0,1] and converted to 8-bit PNG. Dynamic range beyond 1.0 is lost.
+    - **Channel naming** — EXR files with non-standard channel names (not R/G/B/A) fall back to source-order channel selection, which may produce incorrect color mappings for unusual EXR layouts.
+
+- Network
+
+    - **No retry logic** — a single network failure raises an exception. The caller is responsible for retries.
+    - **GPUOpen pagination** — the material search assumes all results fit in one API page. Materials not in the first page may not be found.
+    - **GPUOpen sequential package lookup** — each package UUID is queried individually; materials with many packages may be slow to resolve.
+
+- Caching
+
+    - **No cache invalidation** — cached materials are never automatically refreshed. Delete the cache file manually to force re-conversion.
+
+
 ## Output Formats
 
-### Three.js
+### Three.js (internal format)
 
 The internal format uses Three.js `MeshPhysicalMaterial` property names. Both MaterialX and USD pipelines produce the same structure. Each property carries a `value`, a base64-encoded `texture`, or both:
 
@@ -86,8 +185,6 @@ Parametric materials (PhysicallyBased) have values only:
     }
 }
 ```
-
-#### Property name mapping
 
 Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 
@@ -130,7 +227,23 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 
 ### glTF
 
-`to_gltf()` converts a single material to the glTF 2.0 JSON structure. `collect_gltf_textures()` does the same for multiple materials with shared, deduplicated textures. Both return the same schema:
+`to_gltf()` converts a single material to the glTF 2.0 JSON structure. `collect_gltf_textures()` does the same for multiple materials with shared, deduplicated textures. Both return the same schema and advanced material features are mapped to standard `KHR_materials_*` extensions:
+
+| Feature | glTF extension |
+| --- | --- |
+| IOR | `KHR_materials_ior` |
+| Transmission | `KHR_materials_transmission` |
+| Volume (thickness, attenuation) | `KHR_materials_volume` |
+| Clearcoat | `KHR_materials_clearcoat` |
+| Sheen | `KHR_materials_sheen` |
+| Iridescence | `KHR_materials_iridescence` |
+| Anisotropy | `KHR_materials_anisotropy` |
+| Specular | `KHR_materials_specular` |
+| Emissive strength | `KHR_materials_emissive_strength` |
+| Dispersion | `KHR_materials_dispersion` |
+| Texture repeat | `KHR_texture_transform` |
+
+**Example:**
 
 ```json
 {
@@ -164,62 +277,48 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 }
 ```
 
-#### Single material
+**Usage**
 
-```python
-mat = Material.gpuopen.load("Car Paint")
-gltf = mat.to_gltf()
-```
+- Single material
 
-#### Multiple materials with texture deduplication
+    ```python
+    mat = Material.gpuopen.load("Car Paint")
+    gltf = mat.to_gltf()
+    ```
 
-```python
-from threejs_materials import Material, collect_gltf_textures
+- Multiple materials with texture deduplication
 
-materials = {
-    "body": Material.gpuopen.load("Car Paint"),
-    "wood": Material.gpuopen.load("Ivory Walnut Solid Wood"),
-    "glass": Material.physicallybased.load("Glass"),
-}
+    ```python
+    from threejs_materials import Material, collect_gltf_textures
 
-gltf = collect_gltf_textures(materials)
-# Textures shared across materials are deduplicated in the images array.
-```
+    materials = {
+        "body": Material.gpuopen.load("Car Paint"),
+        "wood": Material.gpuopen.load("Ivory Walnut Solid Wood"),
+        "glass": Material.physicallybased.load("Glass"),
+    }
 
-#### Import from glTF
+    gltf = collect_gltf_textures(materials)
+    # Textures shared across materials are deduplicated in the images array.
+    ```
 
-```python
-mat = Material.from_gltf(gltf_data)           # first material
-mat = Material.from_gltf(gltf_data, index=1)  # second material
-```
+- Import from glTF
 
-#### Texture repeat
+    ```python
+    mat = Material.from_gltf(gltf_data)           # first material
+    mat = Material.from_gltf(gltf_data, index=1)  # second material
+    ```
 
-`Material.scale()` is exported as the `KHR_texture_transform` extension on each texture reference:
+- Texture repeat
 
-```python
-tiled = mat.scale(2, 2)  # texture appears 2x larger
-gltf = tiled.to_gltf()
-# Each texture ref gets: "extensions": {"KHR_texture_transform": {"scale": [0.5, 0.5]}}
-```
+    `Material.scale()` is exported as the `KHR_texture_transform` extension on each texture reference:
 
-#### glTF extensions used
+    ```python
+    tiled = mat.scale(2, 2)  # texture appears 2x larger
+    gltf = tiled.to_gltf()
+    # Each texture ref gets: "extensions": {"KHR_texture_transform": {"scale": [0.5, 0.5]}}
+    ```
 
-Advanced material features are mapped to standard `KHR_materials_*` extensions:
 
-| Feature | glTF extension |
-| --- | --- |
-| IOR | `KHR_materials_ior` |
-| Transmission | `KHR_materials_transmission` |
-| Volume (thickness, attenuation) | `KHR_materials_volume` |
-| Clearcoat | `KHR_materials_clearcoat` |
-| Sheen | `KHR_materials_sheen` |
-| Iridescence | `KHR_materials_iridescence` |
-| Anisotropy | `KHR_materials_anisotropy` |
-| Specular | `KHR_materials_specular` |
-| Emissive strength | `KHR_materials_emissive_strength` |
-| Dispersion | `KHR_materials_dispersion` |
-| Texture repeat | `KHR_texture_transform` |
 
 ### Three.js ↔ glTF conversion
 
@@ -235,7 +334,7 @@ The glTF export is **visually lossless** for all properties except displacement.
 | `texture_repeat` / `scale()` | Preserved via `KHR_texture_transform` |
 | Source metadata (`id`, `source`, `url`, `license`) | Not stored in glTF; `from_gltf()` sets `source="gltf"` |
 
-#### Round-trip example
+**Round-trip example**
 
 ```python
 m = Material.gpuopen.load("Perforated Metal")
@@ -243,30 +342,34 @@ g = m.to_gltf()
 m2 = Material.from_gltf(g)
 ```
 
-**Original material** (`m`):
-```
-color: value=[1.0, 1.0, 1.0], texture='data:image/png;base64,...'
-metalness: value=1.0, texture='data:image/png;base64,...'
-roughness: value=1.0, texture='data:image/png;base64,...'
-normal: texture='data:image/png;base64,...'
-specularIntensity: value=1.0
-specularColor: value=[1.0, 1.0, 1.0]
-ior: value=1.5
-opacity: texture='data:image/png;base64,...'
-```
+Results
 
-**After round-trip** (`m2`):
-```
-color: value=[1.0, 1.0, 1.0], texture='data:image/png;base64,...'
-metalness: value=1.0
-roughness: value=1.0
-metallicRoughness: texture='data:image/png;base64,...'
-normal: texture='data:image/png;base64,...'
-ior: value=1.5
-alphaTest: value=0.5
-specularIntensity: value=1.0
-specularColor: value=[1.0, 1.0, 1.0]
-```
+- Original material (`m`):
+
+    ```
+    color: value=[1.0, 1.0, 1.0], texture='data:image/png;base64,...'
+    metalness: value=1.0, texture='data:image/png;base64,...'
+    roughness: value=1.0, texture='data:image/png;base64,...'
+    normal: texture='data:image/png;base64,...'
+    specularIntensity: value=1.0
+    specularColor: value=[1.0, 1.0, 1.0]
+    ior: value=1.5
+    opacity: texture='data:image/png;base64,...'
+    ```
+
+- After round-trip (`m2`):
+
+    ```
+    color: value=[1.0, 1.0, 1.0], texture='data:image/png;base64,...'
+    metalness: value=1.0
+    roughness: value=1.0
+    metallicRoughness: texture='data:image/png;base64,...'
+    normal: texture='data:image/png;base64,...'
+    ior: value=1.5
+    alphaTest: value=0.5
+    specularIntensity: value=1.0
+    specularColor: value=[1.0, 1.0, 1.0]
+    ```
 
 What changed:
 
@@ -285,136 +388,194 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 - Even in the internal Three.js format, displacement is **optional** and most CAD viewers ignore it.
 - For visual surface detail, **normal maps** (which survive the round-trip) are a better fit — they simulate surface relief without requiring extra geometry.
 
+
 ## Common API
+
+### MaterialX Handling
+
+- `Material.list_sources()`
+
+    Print available sources with clickable URLs.
+
+    ```python
+    from threejs_materials import Material
+
+    Material.list_sources()
+    # Material sources:
+    #   Material.ambientCG        https://ambientcg.com/list?type=material
+    #   Material.GPUOpen          https://matlib.gpuopen.com/main/materials/all
+    #   Material.PolyHaven        https://polyhaven.com/textures
+    #   Material.PhysicallyBased  https://physicallybased.info/
+    ```
+
+- `Material.{source}.load(name, resolution="1K") -> Material`
+
+    Download, convert, and cache a material.
+
+    ```python
+    from threejs_materials import Material
+
+    mat = Material.gpuopen.load("Car Paint", resolution="1K")
+    mat = Material.ambientcg.load("Onyx015", resolution="1K")
+    mat = Material.polyhaven.load("plank_flooring_04", resolution="1K")
+    mat = Material.physicallybased.load("Titanium")
+    ```
+
+    The first call downloads and converts the material (takes a few seconds). Subsequent calls return the cached JSON instantly from `~/.materialx-cache/`.
+
+    **Resolution**
+
+    Pass a normalized resolution (`1K`, `2K`, `4K`, `8K` — case-insensitive). Each source maps it to its native format:
+
+    | Input | GPUOpen | ambientCG | PolyHaven | PhysicallyBased |
+    | ----- | ------- | --------- | --------- | --------------- |
+    | 1K    | 1k 8b   | 1K-PNG    | 1k        | n/a             |
+    | 2K    | 2k 8b   | 2K-PNG    | 2k        | n/a             |
+    | 4K    | 4k 8b   | 4K-PNG    | 4k        | n/a             |
+    | 8K    | —       | 8K-PNG    | 8k        | n/a             |
+
+    PhysicallyBased materials are parametric — no resolution needed (and not accepted).
+
+- `Material.from_mtlx(mtlx_file) -> Material`
+
+    Convert a local `.mtlx` file without downloading anything.
+
+    ```python
+    from threejs_materials import Material
+
+    mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
+    ```
+
+    Texture paths in the `.mtlx` are resolved relative to the file's location.
 
 ### Customization
 
-#### `material.override(**props) -> Material`
+- `material.override(**props) -> Material`
 
-Return a new `Material` with property overrides. The original material is not modified.
+    Return a new `Material` with property overrides. The original material is not modified.
 
-```python
-mat = Material.gpuopen.load("Car Paint")
+    ```python
+    mat = Material.gpuopen.load("Car Paint")
 
-red_paint = mat.override(color=(0.8, 0.1, 0.1))
-rough_red = mat.override(color=(0.8, 0.1, 0.1), roughness=0.9)
-```
+    red_paint = mat.override(color=(0.8, 0.1, 0.1))
+    rough_red = mat.override(color=(0.8, 0.1, 0.1), roughness=0.9)
+    ```
 
-Overrides set the `value` of the named property, creating it if absent. Existing textures are preserved. Calls can be chained: `mat.override(color=(1,0,0)).override(roughness=0.5)`.
+    Overrides set the `value` of the named property, creating it if absent. Existing textures are preserved. Calls can be chained: `mat.override(color=(1,0,0)).override(roughness=0.5)`.
 
-#### `material.scale(u, v) -> Material`
+- `material.scale(u, v) -> Material`
 
-Return a new `Material` with texture scaling applied. The original material is not modified.
+    Return a new `Material` with texture scaling applied. The original material is not modified.
 
-```python
-tiled = mat.scale(3, 3)      # texture appears 3x larger
-small = mat.scale(0.5, 0.5)  # texture tiles 2x in each direction
-```
+    ```python
+    tiled = mat.scale(3, 3)      # texture appears 3x larger
+    small = mat.scale(0.5, 0.5)  # texture tiles 2x in each direction
+    ```
 
-`scale(u, v)` sets `texture_repeat = (1/u, 1/v)` internally. In Three.js this maps to `texture.repeat`, in glTF it is exported as `KHR_texture_transform` with `scale: [1/u, 1/v]`. Can be chained with `override()`: `mat.override(color=(1,0,0)).scale(2, 2)`.
+    `scale(u, v)` sets `texture_repeat = (1/u, 1/v)` internally. In Three.js this maps to `texture.repeat`, in glTF it is exported as `KHR_texture_transform` with `scale: [1/u, 1/v]`. Can be chained with `override()`: `mat.override(color=(1,0,0)).scale(2, 2)`.
 
 ### Import and Export
 
-#### `Material.from_mtlx(mtlx_file) -> Material`
+- `Material.from_mtlx(mtlx_file) -> Material`
 
-Convert a local `.mtlx` file. Texture paths are resolved relative to the file's location. See [MaterialX](#materialx) for details.
+    Convert a local `.mtlx` file. Texture paths are resolved relative to the file's location. See [MaterialX](#materialx) for details.
 
-```python
-mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
-```
+    ```python
+    mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
+    ```
 
-#### `Material.from_usd(usd_file) -> Material`
+- `Material.from_usd(usd_file) -> Material`
 
-Load a USD file (`.usda`, `.usdc`, `.usdz`) with `UsdPreviewSurface` materials. Requires `usd-core`. See [USD](#usd) for details.
+    Load a USD file (`.usda`, `.usdc`, `.usdz`) with `UsdPreviewSurface` materials. Requires `usd-core`. See [USD](#usd) for details.
 
-```python
-mat = Material.from_usd("model.usda")
-```
+    ```python
+    mat = Material.from_usd("model.usda")
+    ```
 
-#### `Material.from_gltf(gltf_data, index=0) -> Material`
+- `Material.from_gltf(gltf_data, index=0) -> Material`
 
-Import a material from a glTF structure (the same schema returned by `to_gltf()` and `collect_gltf_textures()`). Resolves texture indices back to base64 URIs and maps glTF properties to the internal format. See [Three.js ↔ glTF conversion](#threejs--gltf-conversion) for round-trip behavior.
+    Import a material from a glTF structure (the same schema returned by `to_gltf()` and `collect_gltf_textures()`). Resolves texture indices back to base64 URIs and maps glTF properties to the internal format. See [Three.js ↔ glTF conversion](#threejs--gltf-conversion) for round-trip behavior.
 
-```python
-mat = Material.from_gltf(gltf_data)           # first material
-mat = Material.from_gltf(gltf_data, index=1)  # second material
-```
+    ```python
+    mat = Material.from_gltf(gltf_data)           # first material
+    mat = Material.from_gltf(gltf_data, index=1)  # second material
+    ```
 
-#### `material.to_gltf() -> dict`
+- `material.to_gltf() -> dict`
 
-Convert a single material to the glTF 2.0 JSON structure with `asset`, `images`, `samplers`, `textures`, and `materials` arrays. See [glTF](#gltf) for the full schema.
+    Convert a single material to the glTF 2.0 JSON structure with `asset`, `images`, `samplers`, `textures`, and `materials` arrays. See [glTF](#gltf) for the full schema.
 
-```python
-gltf = mat.to_gltf()
-```
+    ```python
+    gltf = mat.to_gltf()
+    ```
 
-#### `collect_gltf_textures(materials) -> dict`
+- `collect_gltf_textures(materials) -> dict`
 
-Convert multiple materials to a glTF structure with shared, deduplicated textures. Returns the same schema as `to_gltf()`. See [glTF](#gltf) for details.
+    Convert multiple materials to a glTF structure with shared, deduplicated textures. Returns the same schema as `to_gltf()`. See [glTF](#gltf) for details.
 
-```python
-from threejs_materials import Material, collect_gltf_textures
+    ```python
+    from threejs_materials import Material, collect_gltf_textures
 
-gltf = collect_gltf_textures({
-    "body": Material.gpuopen.load("Car Paint"),
-    "glass": Material.physicallybased.load("Glass"),
-})
-```
+    gltf = collect_gltf_textures({
+        "body": Material.gpuopen.load("Car Paint"),
+        "glass": Material.physicallybased.load("Glass"),
+    })
+    ```
 
 ### Utilities
 
-#### `Material.list_sources()`
+- `Material.list_sources()`
 
-Print available material sources with clickable URLs.
+    Print available material sources with clickable URLs.
 
-```python
-Material.list_sources()
-# Material sources:
-#   Material.ambientcg        https://ambientcg.com/list?type=material
-#   Material.gpuopen          https://matlib.gpuopen.com/main/materials/all
-#   Material.polyhaven        https://polyhaven.com/textures
-#   Material.physicallybased  https://physicallybased.info/
-```
+    ```python
+    Material.list_sources()
+    # Material sources:
+    #   Material.ambientcg        https://ambientcg.com/list?type=material
+    #   Material.gpuopen          https://matlib.gpuopen.com/main/materials/all
+    #   Material.polyhaven        https://polyhaven.com/textures
+    #   Material.physicallybased  https://physicallybased.info/
+    ```
 
-#### `material.dump(gltf=False, json_format=False) -> str`
+- `material.dump(gltf=False, json_format=False) -> str`
 
-Return a human-readable summary of the material. Textures are abbreviated to `'data:image/png;base64,...'`. Also used by `repr(material)`.
+    Return a human-readable summary of the material. Textures are abbreviated to `'data:image/png;base64,...'`. Also used by `repr(material)`.
 
-```python
-print(mat.dump())                          # Three.js properties, text
-print(mat.dump(gltf=True))                 # glTF structure, text
-print(mat.dump(json_format=True))          # Three.js properties, JSON
-print(mat.dump(gltf=True, json_format=True))  # glTF structure, JSON
-```
+    ```python
+    print(mat.dump())                          # Three.js properties, text
+    print(mat.dump(gltf=True))                 # glTF structure, text
+    print(mat.dump(json_format=True))          # Three.js properties, JSON
+    print(mat.dump(gltf=True, json_format=True))  # glTF structure, JSON
+    ```
 
-#### `material.interpolate_color() -> (r, g, b, a)`
+- `material.interpolate_color() -> (r, g, b, a)`
 
-Estimate a single representative sRGB color from a material — useful for CAD viewers that need a flat color per object while keeping a material dictionary for full PBR rendering.
+    Estimate a single representative sRGB color from a material — useful for CAD viewers that need a flat color per object while keeping a material dictionary for full PBR rendering.
 
-```python
-wood = Material.gpuopen.load("Ivory Walnut Solid Wood")
+    ```python
+    wood = Material.gpuopen.load("Ivory Walnut Solid Wood")
 
-materials = {"wood": wood}      # keep for full PBR rendering
-object.material = "wood"
-object.color = wood.interpolate_color()   # (0.53, 0.31, 0.18, 1.0)
-```
+    materials = {"wood": wood}      # keep for full PBR rendering
+    object.material = "wood"
+    object.color = wood.interpolate_color()   # (0.53, 0.31, 0.18, 1.0)
+    ```
 
-When the material has a color texture, the texture is decoded and averaged (requires `Pillow`). Scalar colors (linear RGB) are converted to sRGB. Transmission and opacity are mapped to the alpha channel so glass-like materials appear semi-transparent.
+    When the material has a color texture, the texture is decoded and averaged (requires `Pillow`). Scalar colors (linear RGB) are converted to sRGB. Transmission and opacity are mapped to the alpha channel so glass-like materials appear semi-transparent.
 
-#### `encode_texture_base64(file_path) -> str`
+- `encode_texture_base64(file_path) -> str`
 
-Encode an image file as a base64 data URI. Automatically converts EXR to PNG.
+    Encode an image file as a base64 data URI. Automatically converts EXR to PNG.
 
-```python
-from threejs_materials import encode_texture_base64
+    ```python
+    from threejs_materials import encode_texture_base64
 
-data_uri = encode_texture_base64("path/to/textures/normal.png")
-# -> 'data:image/png;base64,iVBORw0KGgo...'
-```
+    data_uri = encode_texture_base64("path/to/textures/normal.png")
+    # -> 'data:image/png;base64,iVBORw0KGgo...'
+    ```
 
-### Three.js usage
+## Three.js usage
 
-#### From internal format (single material)
+### From internal format (single material)
 
 ```javascript
 const data = JSON.parse(jsonStr);
@@ -434,7 +595,7 @@ for (const [key, prop] of Object.entries(data.properties)) {
 }
 ```
 
-#### From glTF (multi-material)
+### From glTF (multi-material)
 
 When using `collect_gltf_textures()` to produce a multi-material glTF JSON, load it with Three.js's `GLTFLoader`:
 
@@ -466,164 +627,8 @@ Alternatively, when injecting materials into an existing glTF file (e.g. from bu
 - **Scalar x texture**: When both `value` and `texture` are present, Three.js multiplies them. The library sets scalars to `1.0` (neutral) when a texture is present so the texture controls fully.
 - **glTF packed metallicRoughness**: When present, the `metallicRoughness` property carries a single packed texture (G=roughness, B=metalness). The consumer must assign it to both `metalnessMap` and `roughnessMap`.
 
----
 
-## MaterialX
-
-### Sources
-
-| Source                                                   | Type                     | Shader model       |
-| -------------------------------------------------------- | ------------------------ | ------------------ |
-| [ambientCG](https://ambientcg.com/)                      | Texture-based            | `open_pbr_surface` |
-| [GPUOpen MaterialX Library](https://matlib.gpuopen.com/) | Procedural (baked)       | `standard_surface` |
-| [PolyHaven](https://polyhaven.com/)                      | Texture-based            | `standard_surface` |
-| [PhysicallyBased](https://physicallybased.info/)         | Parametric (no textures) | `open_pbr_surface` |
-
-Browse materials on the source websites, then load them by name.
-
-### `Material.{source}.load(name, resolution="1K") -> Material`
-
-Download, convert, and cache a material.
-
-```python
-from threejs_materials import Material
-
-mat = Material.gpuopen.load("Car Paint", resolution="1K")
-mat = Material.ambientcg.load("Onyx015", resolution="1K")
-mat = Material.polyhaven.load("plank_flooring_04", resolution="1K")
-mat = Material.physicallybased.load("Titanium")
-```
-
-The first call downloads and converts the material (takes a few seconds). Subsequent calls return the cached JSON instantly from `~/.materialx-cache/`.
-
-#### Resolution
-
-Pass a normalized resolution (`1K`, `2K`, `4K`, `8K` — case-insensitive). Each source maps it to its native format:
-
-| Input | GPUOpen | ambientCG | PolyHaven | PhysicallyBased |
-| ----- | ------- | --------- | --------- | --------------- |
-| 1K    | 1k 8b   | 1K-PNG    | 1k        | n/a             |
-| 2K    | 2k 8b   | 2K-PNG    | 2k        | n/a             |
-| 4K    | 4k 8b   | 4K-PNG    | 4k        | n/a             |
-| 8K    | —       | 8K-PNG    | 8k        | n/a             |
-
-PhysicallyBased materials are parametric — no resolution needed (and not accepted).
-
-### `Material.list_sources()`
-
-Print available sources with clickable URLs.
-
-```python
-from threejs_materials import Material
-
-Material.list_sources()
-# Material sources:
-#   Material.ambientCG        https://ambientcg.com/list?type=material
-#   Material.GPUOpen          https://matlib.gpuopen.com/main/materials/all
-#   Material.PolyHaven        https://polyhaven.com/textures
-#   Material.PhysicallyBased  https://physicallybased.info/
-```
-
-### `Material.from_mtlx(mtlx_file) -> Material`
-
-Convert a local `.mtlx` file without downloading anything.
-
-```python
-from threejs_materials import Material
-
-mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
-```
-
-Texture paths in the `.mtlx` are resolved relative to the file's location.
-
-### Conversion pipeline
-
-When a material is loaded:
-
-1. **Download** — source-specific: fetch ZIP (ambientCG, GPUOpen), individual files (PolyHaven), or generate from parameters (PhysicallyBased)
-2. **Bake** — run MaterialX `TextureBaker` (GLSL preferred, MSL fallback on macOS) to flatten procedural graphs into texture images
-3. **Fallback merge** — if the baker can't handle certain textures, merge from the original document
-4. **EXR to PNG** — convert any EXR textures to 8-bit PNG
-5. **Extract** — map shader inputs to `MeshPhysicalMaterial` properties with base64-encoded textures
-6. **Cache** — write JSON to `~/.materialx-cache/`
-
-### Cache
-
-Converted materials are cached as flat JSON files in `~/.materialx-cache/`:
-
-```
-~/.materialx-cache/
-    gpuopen_car_paint_1k_8b.json
-    ambientcg_onyx015_1k-png.json
-    polyhaven_plank_flooring_04_1k.json
-    physicallybased_titanium.json
-```
-
-To force re-conversion, delete the cached file and call `.load()` again.
-
-### Shader model coverage
-
-Supported models: `standard_surface`, `gltf_pbr`, `open_pbr_surface`. Other models produce empty output with a logged warning.
-
-| Feature          | standard_surface                        | gltf_pbr                 | open_pbr_surface         |
-| ---------------- | --------------------------------------- | ------------------------ | ------------------------ |
-| Base color       | Yes                                     | Yes                      | Yes                      |
-| Metalness        | Yes                                     | Yes                      | Yes                      |
-| Roughness        | Yes                                     | Yes                      | Yes                      |
-| Normal map       | Yes                                     | Yes                      | Yes                      |
-| Specular         | Yes (weight, color, IOR)                | Yes (weight, color, IOR) | Yes (weight, color, IOR) |
-| Transmission     | Yes                                     | Yes (+ attenuation)      | Yes (+ attenuation)      |
-| Emission         | Yes                                     | Yes                      | Yes                      |
-| Clearcoat        | Yes                                     | Yes                      | Yes                      |
-| Clearcoat normal | Yes                                     | Yes                      | Yes                      |
-| Sheen            | Yes                                     | Yes                      | Yes (fuzz)               |
-| Iridescence      | Yes                                     | Yes                      | Yes                      |
-| Anisotropy       | Yes (scalar — no Three.js strength map) | Yes                      | Yes                      |
-| Opacity          | Yes                                     | Yes (alpha/alpha_mode)   | Yes (geometry_opacity)   |
-| Displacement     | Yes (model-independent)                 | Yes                      | Yes                      |
-| Dispersion       | No                                      | Yes                      | Yes                      |
-| Normal scale     | No (baked into texture)                 | Yes                      | No (baked into texture)  |
-| Thin-walled      | No                                      | No                       | Yes (→ DoubleSide)       |
-| Subsurface       | No                                      | No                       | No                       |
-
-Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no SSS support.
-
-### MaterialX limitations
-
-#### Materials
-
-- **Single material per document** — only the first material is used when a `.mtlx` file contains multiple materials. A warning is logged.
-- **First shader node** — if a material has multiple shader nodes (e.g. surface + volume), only the first surface shader is extracted.
-
-#### Baking
-
-- **8-bit textures** — the TextureBaker uses `UINT8` output. HDR information (emissive, HDR environment lighting baked into textures) is clamped to [0,1]. This is acceptable for web preview but lossy for physically accurate emissive maps.
-- **Global bake lock** — baking operations are serialized via a `threading.Lock` because the MaterialX baker requires `os.chdir`. This is thread-safe but becomes a bottleneck under concurrent load. The lock is per-process only (`threading.Lock`, not `multiprocessing.Lock`).
-- **Geometry-dependent nodes** — procedurals driven by `<position>`, `<normal>`, or `<tangent>` cannot be baked (the baker renders on a flat UV quad with no 3D geometry).
-
-#### Image tracing
-
-- **Single upstream image** — `find_upstream_image` returns the first image node found when walking upstream. Complex graphs with multiple images (layered blends, channel packing before baking) will only capture one image. After baking, this is fine since the baker flattens everything to single `<image>` nodes.
-- **No channel extraction tracking** — when an image passes through `extract` or `swizzle` nodes, the specific channel being used is not recorded. The consumer must know glTF metallicRoughness packing conventions (G=roughness, B=metalness).
-
-#### EXR conversion
-
-- **LDR clamp** — EXR textures are clamped to [0,1] and converted to 8-bit PNG. Dynamic range beyond 1.0 is lost.
-- **Channel naming** — EXR files with non-standard channel names (not R/G/B/A) fall back to source-order channel selection, which may produce incorrect color mappings for unusual EXR layouts.
-
-#### Network
-
-- **No retry logic** — a single network failure raises an exception. The caller is responsible for retries.
-- **GPUOpen pagination** — the material search assumes all results fit in one API page. Materials not in the first page may not be found.
-- **GPUOpen sequential package lookup** — each package UUID is queried individually; materials with many packages may be slow to resolve.
-
-#### Caching
-
-- **No cache invalidation** — cached materials are never automatically refreshed. Delete the cache file manually to force re-conversion.
-
----
-
-## USD
+## USD support
 
 For Blender users and other USD workflows: `Material.from_usd()` reads `UsdPreviewSurface` materials directly from USD files. No MaterialX baking is needed since UsdPreviewSurface is already a flat PBR shader.
 
@@ -665,7 +670,6 @@ Inputs at their UsdPreviewSurface default value are omitted from the output.
 - **No UV transform support** — `UsdTransform2d` nodes are not read; texture coordinates are assumed to be used as-is.
 - **Emission intensity** — UsdPreviewSurface has no emission intensity input; `emissiveColor` maps directly to `emissive`.
 
----
 
 ## Clients
 
