@@ -94,9 +94,41 @@ class TestMaterial:
         data["properties"]["color"]["texture"] = "data:image/png;base64," + "A" * 100
         mat = Material(data)
         r = repr(mat)
-        assert "texture=" in r
-        # Long base64 should be truncated in repr
-        assert "..." in r
+        assert "texture='data:image/png;base64,...'" in r
+
+    def test_dump_gltf(self):
+        data = _sample_data()
+        data["properties"]["color"]["texture"] = "data:image/png;base64," + "A" * 100
+        data["properties"]["metalness"] = {"value": 0.9}
+        data["properties"]["clearcoat"] = {"value": 0.8}
+        mat = Material(data)
+        r = mat.dump(gltf=True)
+        assert "Test Material" in r
+        assert "materials:" in r
+        assert "'data:image/png;base64,...'" in r
+        assert "metallicFactor:" in r
+
+    def test_dump_json_threejs(self):
+        data = _sample_data()
+        data["properties"]["color"]["texture"] = "data:image/png;base64," + "A" * 100
+        mat = Material(data)
+        r = mat.dump(json_format=True)
+        parsed = json.loads(r)
+        assert parsed["name"] == "Test Material"
+        assert parsed["properties"]["color"]["texture"] == "data:image/png;base64,..."
+        assert parsed["properties"]["color"]["value"] == [1.0, 0.0, 0.0]
+
+    def test_dump_json_gltf(self):
+        data = _sample_data()
+        data["properties"]["color"]["texture"] = "data:image/png;base64," + "A" * 100
+        data["properties"]["metalness"] = {"value": 0.9}
+        mat = Material(data)
+        r = mat.dump(gltf=True, json_format=True)
+        parsed = json.loads(r)
+        assert "materials" in parsed
+        m = parsed["materials"][0]
+        assert m["pbrMetallicRoughness"]["metallicFactor"] == 0.9
+        assert parsed["images"][0]["uri"] == "data:image/png;base64,..."
 
     def test_getitem(self):
         mat = Material(_sample_data())
@@ -267,3 +299,302 @@ class TestClearCache:
     def test_clear_nonexistent_cache(self, tmp_path, monkeypatch):
         monkeypatch.setattr("threejs_materials.library.CACHE_DIR", tmp_path / "nope")
         assert Material.clear_cache() == 0
+
+
+# ---------------------------------------------------------------------------
+# Material.to_gltf
+# ---------------------------------------------------------------------------
+
+# Tiny 1x1 PNG helper (reuse from conftest)
+from conftest import _make_1x1_png
+import base64
+
+
+def _b64_png(r=128, g=128, b=128):
+    data = _make_1x1_png(r, g, b)
+    return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+
+
+class TestToGltf:
+    """Tests for to_gltf() which now returns the full glTF schema."""
+
+    @staticmethod
+    def _mat(g):
+        """Extract the first material from a to_gltf() result."""
+        return g["materials"][0]
+
+    @staticmethod
+    def _tex_uri(g, index):
+        """Resolve a texture index to its image URI."""
+        src = g["textures"][index]["source"]
+        return g["images"][src]["uri"]
+
+    def test_schema_structure(self):
+        mat = Material(_sample_data())
+        g = mat.to_gltf()
+        assert "materials" in g
+        assert isinstance(g["materials"], list)
+        assert len(g["materials"]) == 1
+
+    def test_name(self):
+        g = Material(_sample_data()).to_gltf()
+        assert self._mat(g)["name"] == "Test Material"
+
+    def test_basic_pbr_values(self):
+        data = _sample_data(properties={
+            "color": {"value": [0.8, 0.2, 0.1]},
+            "metalness": {"value": 0.9},
+            "roughness": {"value": 0.4},
+        })
+        m = self._mat(Material(data).to_gltf())
+        pbr = m["pbrMetallicRoughness"]
+        assert pbr["baseColorFactor"] == [0.8, 0.2, 0.1, 1.0]
+        assert pbr["metallicFactor"] == 0.9
+        assert pbr["roughnessFactor"] == 0.4
+
+    def test_base_color_factor_includes_opacity(self):
+        data = _sample_data(properties={
+            "color": {"value": [1.0, 1.0, 1.0]},
+            "opacity": {"value": 0.5},
+        })
+        m = self._mat(Material(data).to_gltf())
+        assert m["pbrMetallicRoughness"]["baseColorFactor"] == [1.0, 1.0, 1.0, 0.5]
+
+    def test_color_texture(self):
+        tex = _b64_png(200, 100, 50)
+        data = _sample_data(properties={
+            "color": {"value": [1.0, 1.0, 1.0], "texture": tex},
+        })
+        g = Material(data).to_gltf()
+        m = self._mat(g)
+        idx = m["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+        assert self._tex_uri(g, idx) == tex
+
+    def test_opacity_texture_merged_into_base_color(self):
+        color_tex = _b64_png(200, 100, 50)
+        opacity_tex = _b64_png(128, 128, 128)
+        data = _sample_data(properties={
+            "color": {"value": [1.0, 1.0, 1.0], "texture": color_tex},
+            "opacity": {"texture": opacity_tex},
+        })
+        g = Material(data).to_gltf()
+        m = self._mat(g)
+        idx = m["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+        merged_uri = self._tex_uri(g, idx)
+        assert merged_uri.startswith("data:image/png;base64,")
+        assert merged_uri != color_tex
+
+    def test_opacity_texture_only_creates_white_rgba(self):
+        opacity_tex = _b64_png(128, 128, 128)
+        data = _sample_data(properties={
+            "opacity": {"texture": opacity_tex},
+        })
+        g = Material(data).to_gltf()
+        m = self._mat(g)
+        idx = m["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+        assert self._tex_uri(g, idx).startswith("data:image/png;base64,")
+
+    def test_opacity_texture_sets_mask_alpha_mode(self):
+        opacity_tex = _b64_png(128, 128, 128)
+        data = _sample_data(properties={
+            "color": {"value": [1.0, 1.0, 1.0], "texture": _b64_png()},
+            "opacity": {"texture": opacity_tex},
+        })
+        m = self._mat(Material(data).to_gltf())
+        assert m["alphaMode"] == "MASK"
+        assert m["alphaCutoff"] == 0.5
+
+    def test_normal_texture(self):
+        tex = _b64_png(128, 128, 255)
+        data = _sample_data(properties={"normal": {"texture": tex}})
+        g = Material(data).to_gltf()
+        m = self._mat(g)
+        idx = m["normalTexture"]["index"]
+        assert self._tex_uri(g, idx) == tex
+
+    def test_normal_scale(self):
+        tex = _b64_png(128, 128, 255)
+        data = _sample_data(properties={
+            "normal": {"texture": tex},
+            "normalScale": {"value": [0.5, 0.5]},
+        })
+        m = self._mat(Material(data).to_gltf())
+        assert m["normalTexture"]["scale"] == 0.5
+
+    def test_occlusion_texture(self):
+        tex = _b64_png(200, 200, 200)
+        data = _sample_data(properties={"ao": {"texture": tex}})
+        g = Material(data).to_gltf()
+        m = self._mat(g)
+        idx = m["occlusionTexture"]["index"]
+        assert self._tex_uri(g, idx) == tex
+
+    def test_emissive(self):
+        data = _sample_data(properties={"emissive": {"value": [1.0, 0.5, 0.0]}})
+        m = self._mat(Material(data).to_gltf())
+        assert m["emissiveFactor"] == [1.0, 0.5, 0.0]
+
+    def test_alpha_mode_blend(self):
+        data = _sample_data(properties={
+            "opacity": {"value": 0.5}, "transparent": {"value": True},
+        })
+        m = self._mat(Material(data).to_gltf())
+        assert m["alphaMode"] == "BLEND"
+
+    def test_alpha_mode_mask(self):
+        data = _sample_data(properties={"alphaTest": {"value": 0.3}})
+        m = self._mat(Material(data).to_gltf())
+        assert m["alphaMode"] == "MASK"
+        assert m["alphaCutoff"] == 0.3
+
+    def test_double_sided(self):
+        data = _sample_data(properties={"side": {"value": 2}})
+        m = self._mat(Material(data).to_gltf())
+        assert m["doubleSided"] is True
+
+    def test_no_double_sided_by_default(self):
+        m = self._mat(Material(_sample_data()).to_gltf())
+        assert "doubleSided" not in m
+
+    def test_extension_ior(self):
+        data = _sample_data(properties={"ior": {"value": 1.45}})
+        m = self._mat(Material(data).to_gltf())
+        assert m["extensions"]["KHR_materials_ior"]["ior"] == 1.45
+
+    def test_default_ior_preserved(self):
+        data = _sample_data(properties={"ior": {"value": 1.5}})
+        m = self._mat(Material(data).to_gltf())
+        assert m["extensions"]["KHR_materials_ior"]["ior"] == 1.5
+
+    def test_extension_transmission(self):
+        data = _sample_data(properties={"transmission": {"value": 0.8}})
+        m = self._mat(Material(data).to_gltf())
+        assert m["extensions"]["KHR_materials_transmission"]["transmissionFactor"] == 0.8
+
+    def test_extension_volume(self):
+        data = _sample_data(properties={
+            "thickness": {"value": 0.5},
+            "attenuationColor": {"value": [0.9, 0.5, 0.1]},
+            "attenuationDistance": {"value": 0.2},
+        })
+        m = self._mat(Material(data).to_gltf())
+        vol = m["extensions"]["KHR_materials_volume"]
+        assert vol["thicknessFactor"] == 0.5
+        assert vol["attenuationColor"] == [0.9, 0.5, 0.1]
+        assert vol["attenuationDistance"] == 0.2
+
+    def test_extension_clearcoat(self):
+        data = _sample_data(properties={
+            "clearcoat": {"value": 0.8}, "clearcoatRoughness": {"value": 0.1},
+        })
+        m = self._mat(Material(data).to_gltf())
+        cc = m["extensions"]["KHR_materials_clearcoat"]
+        assert cc["clearcoatFactor"] == 0.8
+        assert cc["clearcoatRoughnessFactor"] == 0.1
+
+    def test_extension_sheen(self):
+        data = _sample_data(properties={
+            "sheen": {"value": 1.0}, "sheenColor": {"value": [0.9, 0.8, 0.7]},
+            "sheenRoughness": {"value": 0.3},
+        })
+        m = self._mat(Material(data).to_gltf())
+        sh = m["extensions"]["KHR_materials_sheen"]
+        assert sh["sheenColorFactor"] == [0.9, 0.8, 0.7]
+        assert sh["sheenRoughnessFactor"] == 0.3
+
+    def test_extension_iridescence(self):
+        data = _sample_data(properties={
+            "iridescence": {"value": 1.0}, "iridescenceIOR": {"value": 1.3},
+            "iridescenceThicknessRange": {"value": [100.0, 400.0]},
+        })
+        m = self._mat(Material(data).to_gltf())
+        iri = m["extensions"]["KHR_materials_iridescence"]
+        assert iri["iridescenceFactor"] == 1.0
+        assert iri["iridescenceIor"] == 1.3
+        assert iri["iridescenceThicknessMinimum"] == 100.0
+        assert iri["iridescenceThicknessMaximum"] == 400.0
+
+    def test_extension_anisotropy(self):
+        data = _sample_data(properties={
+            "anisotropy": {"value": 0.5}, "anisotropyRotation": {"value": 1.57},
+        })
+        m = self._mat(Material(data).to_gltf())
+        an = m["extensions"]["KHR_materials_anisotropy"]
+        assert an["anisotropyStrength"] == 0.5
+        assert an["anisotropyRotation"] == 1.57
+
+    def test_extension_specular(self):
+        data = _sample_data(properties={
+            "specularIntensity": {"value": 0.8},
+            "specularColor": {"value": [1.0, 0.9, 0.8]},
+        })
+        m = self._mat(Material(data).to_gltf())
+        sp = m["extensions"]["KHR_materials_specular"]
+        assert sp["specularFactor"] == 0.8
+        assert sp["specularColorFactor"] == [1.0, 0.9, 0.8]
+
+    def test_extension_emissive_strength(self):
+        data = _sample_data(properties={
+            "emissive": {"value": [1.0, 1.0, 1.0]}, "emissiveIntensity": {"value": 2.0},
+        })
+        m = self._mat(Material(data).to_gltf())
+        assert m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"] == 2.0
+
+    def test_extension_dispersion(self):
+        data = _sample_data(properties={"dispersion": {"value": 0.5}})
+        m = self._mat(Material(data).to_gltf())
+        assert m["extensions"]["KHR_materials_dispersion"]["dispersion"] == 0.5
+
+    def test_no_extensions_when_empty(self):
+        data = _sample_data(properties={"color": {"value": [0.5, 0.5, 0.5]}})
+        m = self._mat(Material(data).to_gltf())
+        assert "extensions" not in m
+
+    def test_displacement_not_mapped(self):
+        tex = _b64_png()
+        data = _sample_data(properties={
+            "displacement": {"texture": tex}, "displacementScale": {"value": 0.1},
+        })
+        g = Material(data).to_gltf()
+        assert "displacement" not in str(g["materials"])
+
+    def test_metallic_roughness_packed_texture(self):
+        tex = _b64_png()
+        data = _sample_data(properties={"metallicRoughness": {"texture": tex}})
+        g = Material(data).to_gltf()
+        m = self._mat(g)
+        idx = m["pbrMetallicRoughness"]["metallicRoughnessTexture"]["index"]
+        assert self._tex_uri(g, idx) == tex
+
+    def test_extensions_used(self):
+        data = _sample_data(properties={
+            "ior": {"value": 1.45}, "transmission": {"value": 0.8},
+        })
+        g = Material(data).to_gltf()
+        assert "KHR_materials_ior" in g["extensionsUsed"]
+        assert "KHR_materials_transmission" in g["extensionsUsed"]
+
+    def test_samplers_and_textures_arrays(self):
+        tex = _b64_png()
+        data = _sample_data(properties={"color": {"texture": tex}})
+        g = Material(data).to_gltf()
+        assert len(g["samplers"]) == 1
+        assert g["textures"][0]["source"] == 0
+        assert g["textures"][0]["sampler"] == 0
+
+    def test_no_images_when_no_textures(self):
+        data = _sample_data(properties={"color": {"value": [0.5, 0.5, 0.5]}})
+        g = Material(data).to_gltf()
+        assert "images" not in g
+        assert "samplers" not in g
+        assert "textures" not in g
+
+    def test_texture_repeat_as_khr_texture_transform(self):
+        tex = _b64_png()
+        data = _sample_data(properties={"color": {"texture": tex}})
+        mat = Material(data).scale(2, 2)  # repeat = (0.5, 0.5)
+        g = mat.to_gltf()
+        m = self._mat(g)
+        bc_tex = m["pbrMetallicRoughness"]["baseColorTexture"]
+        assert bc_tex["extensions"]["KHR_texture_transform"]["scale"] == [0.5, 0.5]
+        assert "KHR_texture_transform" in g["extensionsUsed"]
