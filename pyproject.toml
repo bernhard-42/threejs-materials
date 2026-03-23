@@ -1,10 +1,11 @@
 [project]
 name = "threejs-materials"
-version = "0.3.0"
+version = "0.4.0"
 # version also managed by [tool.bumpversion] below
 description = "Download PBR materials on demand and convert to Three.js MeshPhysicalMaterial JSON"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+readme = "README.md"
 dependencies = [
     "materialx>=1.39.4",
     "requests>=2.31.0",
@@ -13,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-usd = ["usd-core>=24.11"]
+usd = ["usd-core>=26.3"]
 dev = ["bump-my-version", "twine", "build"]
 test = ["pytest"]
 
@@ -27,7 +28,7 @@ where = ["src"]
 # bump-my-version settings
 
 [tool.bumpversion]
-current_version = "0.3.0"
+current_version = "0.4.0"
 commit = false
 tag = false
 parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
