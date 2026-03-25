@@ -667,7 +667,32 @@ class Material:
         )
 
     @classmethod
-    def from_gltf(cls, gltf_data: dict, index: int = 0) -> "Material":
+    def from_gltf_file(cls, gltf_file: str, index: int = 0) -> "Material":
+        """Import a material from a ``.gltf`` file on disk.
+
+        Texture file paths in the glTF are resolved relative to the
+        file's directory and encoded as base64 data URIs.
+
+        Parameters
+        ----------
+        gltf_file : str
+            Path to a ``.gltf`` JSON file.
+        index : int
+            Index into the ``materials`` array (default ``0``).
+        """
+        gltf_path = Path(gltf_file).resolve()
+        if not gltf_path.exists():
+            raise FileNotFoundError(f"File not found: {gltf_path}")
+        gltf_data = json.loads(gltf_path.read_text())
+        return cls.from_gltf(gltf_data, index=index, base_dir=gltf_path.parent)
+
+    @classmethod
+    def from_gltf(
+        cls,
+        gltf_data: dict,
+        index: int = 0,
+        base_dir: Path | str | None = None,
+    ) -> "Material":
         """Import a material from a glTF structure.
 
         Parameters
@@ -675,25 +700,48 @@ class Material:
         gltf_data : dict
             A glTF dict with ``images``, ``textures``, and ``materials``
             arrays — the same schema returned by :meth:`to_gltf` and
-            :func:`collect_gltf_textures`.
+            :func:`collect_gltf_textures`, or parsed from a ``.gltf`` file.
         index : int
             Index into the ``materials`` array (default ``0``).
+        base_dir : Path or str, optional
+            Directory for resolving relative texture file paths.  Required
+            when importing a glTF file that references textures by filename
+            (e.g. Blender exports).  Not needed when textures are inline
+            base64 data URIs.
         """
+        from threejs_materials.convert import encode_texture_base64
+
+        if base_dir is not None:
+            base_dir = Path(base_dir)
+
         images = gltf_data.get("images", [])
         textures_arr = gltf_data.get("textures", [])
         mat = gltf_data["materials"][index]
+
+        def _resolve_image_uri(uri: str) -> str | None:
+            """Resolve an image URI to a base64 data URI."""
+            if uri.startswith("data:"):
+                return uri
+            # File path — resolve relative to base_dir
+            if base_dir is not None:
+                file_path = base_dir / uri
+                if file_path.exists():
+                    return encode_texture_base64(file_path)
+            return None
 
         def _resolve_tex(tex_ref: dict | None) -> str | None:
             """Resolve a texture reference to a data URI."""
             if tex_ref is None:
                 return None
             if "uri" in tex_ref:
-                return tex_ref["uri"]
+                return _resolve_image_uri(tex_ref["uri"])
             idx = tex_ref.get("index")
             if idx is not None and idx < len(textures_arr):
                 src = textures_arr[idx].get("source", idx)
                 if src < len(images):
-                    return images[src].get("uri")
+                    uri = images[src].get("uri")
+                    if uri:
+                        return _resolve_image_uri(uri)
             return None
 
         def _get_tex_repeat(tex_ref: dict | None) -> tuple | None:
