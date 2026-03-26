@@ -14,7 +14,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-usd = ["usd-core>=26.3"]
 dev = ["bump-my-version", "twine", "build"]
 test = ["pytest"]
 
