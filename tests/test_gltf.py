@@ -280,10 +280,11 @@ class TestRoundTrip:
         assert imported.properties["color"]["texture"] == tex
 
     def test_export_reimport_reexport_stable(self):
-        """export → import → export produces identical output."""
+        """export → import → export is stable (second round-trip is identical)."""
         mat = _sample(
             color={"value": [0.8, 0.2, 0.1]},
             metalness={"value": 0.9},
+            roughness={"value": 0.4},
             ior={"value": 1.45},
         )
         g1 = mat.to_gltf()

@@ -59,6 +59,21 @@ def _srgb_to_linear(c: float) -> float:
     return ((c + 0.055) / 1.055) ** 2.4
 
 
+def _has_real_alpha(data_uri: str) -> bool:
+    """Check if a base64-encoded texture has any non-opaque alpha pixels."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    _, b64 = data_uri.split(",", 1)
+    img = Image.open(io.BytesIO(base64.b64decode(b64)))
+    if img.mode != "RGBA":
+        return False
+    alpha_min, _ = img.getchannel("A").getextrema()
+    return alpha_min < 255
+
+
 def _merge_opacity_into_color(color_uri: str | None, opacity_uri: str) -> str:
     """Merge an RGB color texture and a grayscale opacity texture into RGBA PNG.
 
@@ -106,7 +121,6 @@ def _average_texture_linear(data_uri: str) -> tuple[float, float, float]:
     return (r, g, b)
 
 
-
 def _parse_color_string(color: str) -> tuple[float, float, float]:
     """Parse a CSS color name or hex string to linear RGB (0-1).
 
@@ -115,7 +129,11 @@ def _parse_color_string(color: str) -> tuple[float, float, float]:
     from PIL import ImageColor
 
     r, g, b = ImageColor.getrgb(color)
-    return (_srgb_to_linear(r / 255.0), _srgb_to_linear(g / 255.0), _srgb_to_linear(b / 255.0))
+    return (
+        _srgb_to_linear(r / 255.0),
+        _srgb_to_linear(g / 255.0),
+        _srgb_to_linear(b / 255.0),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +194,7 @@ def _material_to_gltf(material: "Material") -> dict:
             "uri": _merge_opacity_into_color(color_tex, opacity_tex)
         }
     elif opacity_tex:
-        pbr["baseColorTexture"] = {
-            "uri": _merge_opacity_into_color(None, opacity_tex)
-        }
+        pbr["baseColorTexture"] = {"uri": _merge_opacity_into_color(None, opacity_tex)}
     elif color_tex:
         pbr["baseColorTexture"] = {"uri": color_tex}
 
@@ -317,7 +333,11 @@ def _material_to_gltf(material: "Material") -> dict:
         if iri_ior is not None:
             ext["iridescenceIor"] = iri_ior
         iri_range = _val("iridescenceThicknessRange")
-        if iri_range is not None and isinstance(iri_range, list) and len(iri_range) == 2:
+        if (
+            iri_range is not None
+            and isinstance(iri_range, list)
+            and len(iri_range) == 2
+        ):
             ext["iridescenceThicknessMinimum"] = iri_range[0]
             ext["iridescenceThicknessMaximum"] = iri_range[1]
         extensions["KHR_materials_iridescence"] = ext
@@ -389,7 +409,11 @@ def _finalize_gltf(
     def _replace_uris(obj, tex_repeat):
         """Recursively replace ``{"uri": "data:..."}`` with ``{"index": N}``."""
         if isinstance(obj, dict):
-            if "uri" in obj and isinstance(obj["uri"], str) and obj["uri"].startswith("data:"):
+            if (
+                "uri" in obj
+                and isinstance(obj["uri"], str)
+                and obj["uri"].startswith("data:")
+            ):
                 uri = obj.pop("uri")
                 obj["index"] = _register_uri(uri)
                 # Apply KHR_texture_transform if texture_repeat is set
@@ -421,9 +445,7 @@ def _finalize_gltf(
     if images:
         result["images"] = images
         result["samplers"] = [dict(_DEFAULT_SAMPLER)]
-        result["textures"] = [
-            {"source": i, "sampler": 0} for i in range(len(images))
-        ]
+        result["textures"] = [{"source": i, "sampler": 0} for i in range(len(images))]
 
     if all_extensions:
         result["extensionsUsed"] = sorted(all_extensions)
@@ -623,48 +645,14 @@ class Material:
             baked_mtlx.unlink(missing_ok=True)
 
         name = mtlx_path.stem
-        return cls(
-            {
-                "id": name,
-                "name": name,
-                "source": "local",
-                "url": "",
-                "license": "",
-                "properties": properties,
-            }
-        )
-
-    @classmethod
-    def from_usd(cls, usd_file: str) -> "Material":
-        """Load a USD file (.usda, .usdc, .usdz) with UsdPreviewSurface materials.
-
-        Textures are resolved relative to the file's location.
-        USDZ archives with embedded textures are supported.
-        """
-        usd_path = Path(usd_file).resolve()
-        if not usd_path.exists():
-            raise FileNotFoundError(f"File not found: {usd_path}")
-
-        try:
-            from threejs_materials.usd_reader import extract_usd_properties
-        except ImportError as e:
-            raise ImportError(
-                "USD support requires the 'usd-core' package. "
-                "Install with: pip install threejs-materials[usd]"
-            ) from e
-
-        properties = extract_usd_properties(usd_path)
-        name = usd_path.stem
-        return cls(
-            {
-                "id": name,
-                "name": name,
-                "source": "usd",
-                "url": "",
-                "license": "",
-                "properties": properties,
-            }
-        )
+        return cls({
+            "id": name,
+            "name": name,
+            "source": "local",
+            "url": "",
+            "license": "",
+            "properties": properties,
+        })
 
     @classmethod
     def from_gltf_file(cls, gltf_file: str, index: int = 0) -> "Material":
@@ -720,11 +708,13 @@ class Material:
 
         def _resolve_image_uri(uri: str) -> str | None:
             """Resolve an image URI to a base64 data URI."""
+            from urllib.parse import unquote
+
             if uri.startswith("data:"):
                 return uri
-            # File path — resolve relative to base_dir
+            # File path — URL-decode and resolve relative to base_dir
             if base_dir is not None:
-                file_path = base_dir / uri
+                file_path = base_dir / unquote(uri)
                 if file_path.exists():
                     return encode_texture_base64(file_path)
             return None
@@ -748,9 +738,7 @@ class Material:
             """Extract KHR_texture_transform scale from a texture ref."""
             if tex_ref is None:
                 return None
-            transform = (tex_ref.get("extensions") or {}).get(
-                "KHR_texture_transform"
-            )
+            transform = (tex_ref.get("extensions") or {}).get("KHR_texture_transform")
             if transform and "scale" in transform:
                 s = transform["scale"]
                 return (s[0], s[1])
@@ -767,24 +755,23 @@ class Material:
                 props.setdefault(name, {})["texture"] = uri
 
         # --- pbrMetallicRoughness ---
+        # glTF defaults: baseColorFactor=[1,1,1,1], metallicFactor=1, roughnessFactor=1
         pbr = mat.get("pbrMetallicRoughness", {})
 
-        bcf = pbr.get("baseColorFactor")
-        if bcf:
-            val("color", bcf[:3])
-            if len(bcf) > 3 and bcf[3] < 1.0:
-                val("opacity", bcf[3])
-                val("transparent", True)
+        bcf = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
+        val("color", bcf[:3])
+        if len(bcf) > 3 and bcf[3] < 1.0:
+            val("opacity", bcf[3])
+            val("transparent", True)
 
         tex("color", pbr.get("baseColorTexture"))
 
-        if "metallicFactor" in pbr:
-            val("metalness", pbr["metallicFactor"])
-        if "roughnessFactor" in pbr:
-            val("roughness", pbr["roughnessFactor"])
+        val("metalness", pbr.get("metallicFactor", 1.0))
+        val("roughness", pbr.get("roughnessFactor", 1.0))
 
         mr_tex_ref = pbr.get("metallicRoughnessTexture")
-        tex("metallicRoughness", mr_tex_ref)
+        tex("metalness", mr_tex_ref)
+        tex("roughness", mr_tex_ref)
 
         # --- Top-level ---
         normal_ref = mat.get("normalTexture")
@@ -801,7 +788,15 @@ class Material:
         # --- Alpha mode ---
         alpha_mode = mat.get("alphaMode")
         if alpha_mode == "BLEND":
-            val("transparent", True)
+            # Check if the baseColor texture alpha is actually non-opaque.
+            # Blender sometimes exports alphaMode=BLEND even when the alpha
+            # channel is fully opaque (255 everywhere) — skip in that case.
+            actually_transparent = True
+            color_uri = props.get("color", {}).get("texture")
+            if color_uri and color_uri.startswith("data:"):
+                actually_transparent = _has_real_alpha(color_uri)
+            if actually_transparent:
+                val("transparent", True)
         elif alpha_mode == "MASK":
             val("alphaTest", mat.get("alphaCutoff", 0.5))
 
@@ -905,6 +900,197 @@ class Material:
             data["texture_repeat"] = texture_repeat
         return cls(data)
 
+    @classmethod
+    def create(
+        cls,
+        id: str,
+        *,
+        # --- Scalar values (reasonable defaults) ---
+        color=(0.8, 0.8, 0.8),
+        metalness: float = 0.0,
+        roughness: float = 0.5,
+        ior: float = 1.5,
+        transmission: float = 0.0,
+        opacity: float = 1.0,
+        transparent: bool = False,
+        alphaTest: float | None = None,
+        emissive: tuple | list | None = None,
+        emissiveIntensity: float | None = None,
+        clearcoat: float = 0.0,
+        clearcoatRoughness: float = 0.0,
+        sheen: float = 0.0,
+        sheenColor: tuple | list | None = None,
+        sheenRoughness: float = 0.0,
+        anisotropy: float = 0.0,
+        anisotropyRotation: float = 0.0,
+        specularIntensity: float = 1.0,
+        specularColor: tuple | list | None = None,
+        attenuationColor: tuple | list | None = None,
+        attenuationDistance: float | None = None,
+        thickness: float = 0.0,
+        iridescence: float = 0.0,
+        iridescenceIOR: float = 1.3,
+        iridescenceThicknessRange: tuple | list | None = None,
+        dispersion: float = 0.0,
+        normalScale: tuple | list | None = None,
+        displacementScale: float | None = None,
+        side: int | None = None,
+        # --- Texture maps (data URI or file path, None = no texture) ---
+        color_map: str | None = None,
+        metalness_map: str | None = None,
+        roughness_map: str | None = None,
+        normal_map: str | None = None,
+        emissive_map: str | None = None,
+        ao_map: str | None = None,
+        opacity_map: str | None = None,
+        clearcoat_map: str | None = None,
+        clearcoatRoughness_map: str | None = None,
+        clearcoatNormal_map: str | None = None,
+        transmission_map: str | None = None,
+        sheenColor_map: str | None = None,
+        sheenRoughness_map: str | None = None,
+        anisotropy_map: str | None = None,
+        iridescence_map: str | None = None,
+        specularIntensity_map: str | None = None,
+        specularColor_map: str | None = None,
+        thickness_map: str | None = None,
+        displacement_map: str | None = None,
+    ) -> "Material":
+        """Create a Material from explicit PBR values and texture paths.
+
+        Parameters
+        ----------
+        id : str
+            Material identifier (also used as name).
+
+        Scalar parameters use Three.js ``MeshPhysicalMaterial`` defaults.
+        Texture parameters accept a ``data:`` URI or a local file path
+        (which will be read and base64-encoded automatically).
+
+        Example::
+
+            mat = Material.create(
+                "walnut",
+                color=(0.4, 0.2, 0.1),
+                roughness=0.8,
+                normal_map="bakes/Cube_Normal.png",
+                color_map="bakes/Cube_Diffuse.png",
+                roughness_map="bakes/Cube_Roughness.png",
+            )
+        """
+        from threejs_materials.convert import encode_texture_base64
+
+        def _resolve_texture(tex: str | None) -> str | None:
+            if tex is None:
+                return None
+            if tex.startswith("data:"):
+                return tex
+            p = Path(tex)
+            if p.exists():
+                return encode_texture_base64(p)
+            raise FileNotFoundError(f"Texture file not found: {tex}")
+
+        props: dict = {}
+
+        # --- Build properties with values ---
+        if isinstance(color, str):
+            props["color"] = {"value": list(_parse_color_string(color))}
+        else:
+            props["color"] = {"value": list(color)[:3]}
+        props["metalness"] = {"value": metalness}
+        props["roughness"] = {"value": roughness}
+        props["ior"] = {"value": ior}
+
+        if transmission > 0:
+            props["transmission"] = {"value": transmission}
+        if opacity < 1.0:
+            props["opacity"] = {"value": opacity}
+        if transparent:
+            props["transparent"] = {"value": True}
+        if alphaTest is not None:
+            props["alphaTest"] = {"value": alphaTest}
+        if emissive is not None:
+            props["emissive"] = {"value": list(emissive[:3])}
+        if emissiveIntensity is not None:
+            props["emissiveIntensity"] = {"value": emissiveIntensity}
+        if clearcoat > 0:
+            props["clearcoat"] = {"value": clearcoat}
+            props["clearcoatRoughness"] = {"value": clearcoatRoughness}
+        if sheen > 0:
+            props["sheen"] = {"value": sheen}
+            if sheenColor is not None:
+                props["sheenColor"] = {"value": list(sheenColor[:3])}
+            props["sheenRoughness"] = {"value": sheenRoughness}
+        if anisotropy > 0:
+            props["anisotropy"] = {"value": anisotropy}
+            props["anisotropyRotation"] = {"value": anisotropyRotation}
+        if specularIntensity != 1.0:
+            props["specularIntensity"] = {"value": specularIntensity}
+        if specularColor is not None:
+            props["specularColor"] = {"value": list(specularColor[:3])}
+        if attenuationColor is not None:
+            props["attenuationColor"] = {"value": list(attenuationColor[:3])}
+        if attenuationDistance is not None:
+            props["attenuationDistance"] = {"value": attenuationDistance}
+        if thickness > 0:
+            props["thickness"] = {"value": thickness}
+        if iridescence > 0:
+            props["iridescence"] = {"value": iridescence}
+            props["iridescenceIOR"] = {"value": iridescenceIOR}
+            if iridescenceThicknessRange is not None:
+                props["iridescenceThicknessRange"] = {
+                    "value": list(iridescenceThicknessRange)
+                }
+        if dispersion > 0:
+            props["dispersion"] = {"value": dispersion}
+        if normalScale is not None:
+            props["normalScale"] = {"value": list(normalScale)}
+        if displacementScale is not None:
+            props["displacementScale"] = {"value": displacementScale}
+        if side is not None:
+            props["side"] = {"value": side}
+
+        # --- Resolve and attach textures ---
+        tex_map = {
+            "color": color_map,
+            "metalness": metalness_map,
+            "roughness": roughness_map,
+            "normal": normal_map,
+            "emissive": emissive_map,
+            "ao": ao_map,
+            "opacity": opacity_map,
+            "clearcoat": clearcoat_map,
+            "clearcoatRoughness": clearcoatRoughness_map,
+            "clearcoatNormal": clearcoatNormal_map,
+            "transmission": transmission_map,
+            "sheenColor": sheenColor_map,
+            "sheenRoughness": sheenRoughness_map,
+            "anisotropy": anisotropy_map,
+            "iridescence": iridescence_map,
+            "specularIntensity": specularIntensity_map,
+            "specularColor": specularColor_map,
+            "thickness": thickness_map,
+            "displacement": displacement_map,
+        }
+        for prop_name, tex_path in tex_map.items():
+            uri = _resolve_texture(tex_path)
+            if uri:
+                props.setdefault(prop_name, {})["texture"] = uri
+                # Set neutral scalar when texture is present
+                if prop_name == "color" and "value" in props.get("color", {}):
+                    props["color"]["value"] = [1.0, 1.0, 1.0]
+                elif prop_name in ("metalness", "roughness") and prop_name in props:
+                    props[prop_name]["value"] = 1.0
+
+        return cls({
+            "id": id,
+            "name": id,
+            "source": "custom",
+            "url": "",
+            "license": "",
+            "properties": props,
+        })
+
     def override(
         self,
         *,
@@ -943,17 +1129,26 @@ class Material:
         props = {
             k: v
             for k, v in {
-                "color": color, "roughness": roughness, "metalness": metalness,
-                "ior": ior, "transmission": transmission, "opacity": opacity,
-                "clearcoat": clearcoat, "clearcoatRoughness": clearcoatRoughness,
-                "sheen": sheen, "sheenColor": sheenColor,
-                "sheenRoughness": sheenRoughness, "anisotropy": anisotropy,
+                "color": color,
+                "roughness": roughness,
+                "metalness": metalness,
+                "ior": ior,
+                "transmission": transmission,
+                "opacity": opacity,
+                "clearcoat": clearcoat,
+                "clearcoatRoughness": clearcoatRoughness,
+                "sheen": sheen,
+                "sheenColor": sheenColor,
+                "sheenRoughness": sheenRoughness,
+                "anisotropy": anisotropy,
                 "anisotropyRotation": anisotropyRotation,
                 "specularIntensity": specularIntensity,
-                "emissionColor": emissionColor, "emissionIntensity": emissionIntensity,
+                "emissionColor": emissionColor,
+                "emissionIntensity": emissionIntensity,
                 "attenuationColor": attenuationColor,
                 "attenuationDistance": attenuationDistance,
-                "thickness": thickness, "thinFilmThickness": thinFilmThickness,
+                "thickness": thickness,
+                "thinFilmThickness": thinFilmThickness,
             }.items()
             if v is not None
         }
