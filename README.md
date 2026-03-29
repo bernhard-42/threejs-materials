@@ -1,11 +1,13 @@
 # threejs-materials
 
-A Python library that converts PBR materials into [Three.js `MeshPhysicalMaterial`](https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial)-compatible JSON with base64-encoded textures.
+A Python library that converts PBR materials into [Three.js `MeshPhysicalMaterial`](https://threejs.org/docs/#api/en/materials/MeshPhysicalMaterial)-compatible JSON. Textures are stored as separate files on disk and only base64-encoded when sending to the viewer.
+
+Uses [pygltflib](https://pypi.org/project/pygltflib/) for standard glTF 2.0 file I/O (`.gltf` and `.glb`).
 
 Supported input formats:
 
 - **MaterialX** — download [MaterialX](https://materialx.org/) materials on demand from four open sources, bake procedural graphs into flat textures, and cache results locally. See [MaterialX sources](#sources).
-- **glTF exports from [Blender](https://www.blender.org/)** — export a mesh with the desired material to a `.gltf` file and load it with `Material.from_gltf_file()`. All PBR textures are read and encoded as base64.
+- **glTF exports from [Blender](https://www.blender.org/)** — export a mesh with the desired material to a `.gltf` or `.glb` file and load it with `Material.load_gltf()`. All PBR textures are read automatically via pygltflib.
 
 <table>
 <tr>
@@ -33,6 +35,7 @@ pip install threejs-materials
 - `materialx >= 1.39.4` — MaterialX SDK with TextureBaker
 - `requests >= 2.31.0` — HTTP downloads
 - `openexr >= 3.3` — EXR to PNG conversion
+- `pygltflib >= 1.16` — glTF 2.0 file I/O (pure Python)
 
 ## Input Formats
 
@@ -55,20 +58,27 @@ When a material is loaded the following steps are executed:
 2. **Bake** — run MaterialX `TextureBaker` (GLSL preferred, MSL fallback on macOS) to flatten procedural graphs into texture images
 3. **Fallback merge** — if the baker can't handle certain textures, merge from the original document
 4. **EXR to PNG** — convert any EXR textures to 8-bit PNG
-5. **Extract** — map shader inputs to `MeshPhysicalMaterial` properties with base64-encoded textures
-6. **Cache** — write JSON to `~/.materialx-cache/`
+5. **Extract** — map shader inputs to `MeshPhysicalMaterial` properties with texture file references
+6. **Cache** — write JSON + texture files to `~/.materialx-cache/`
 
-Converted materials are cached as flat JSON files in `~/.materialx-cache/` in the internal [Three.js format](#threejs-internal-format):
+Converted materials are cached in `~/.materialx-cache/` as a small JSON file (property values + texture filenames) plus a companion directory with the texture images:
 
 ```
 ~/.materialx-cache/
-    gpuopen_car_paint_1k_8b.json
-    ambientcg_onyx015_1k-png.json
-    polyhaven_plank_flooring_04_1k.json
-    physicallybased_titanium.json
+    gpuopen_car_paint_1k.json              # few KB — values + texture refs
+    gpuopen_car_paint_1k/                  # texture images
+        color.png
+        roughness.png
+        normal.png
+    ambientcg_onyx015_1k.json
+    ambientcg_onyx015_1k/
+        color.png
+        ...
 ```
 
-To force re-conversion, delete the cached file and call `.load()` again.
+Textures are only base64-encoded when `to_dict()` is called (for sending to the Three.js viewer). This keeps the cache lightweight and allows multiple Materials to share the same texture files without duplicating large blobs in memory.
+
+To force re-conversion, clear the cache with `Material.clear_cache(name=...)` or delete the files manually.
 
 #### Shader model coverage
 
@@ -137,10 +147,10 @@ Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no S
   ```python
   from threejs_materials import Material
 
-  mat = Material.from_gltf_file("brass_cube.gltf")
+  mat = Material.load_gltf("brass_cube.gltf")   # .gltf or .glb
   ```
 
-  Texture file paths (including URL-encoded names with spaces) are resolved relative to the `.gltf` file and encoded as base64 data URIs.
+  pygltflib resolves texture file paths automatically. Both `.gltf` (JSON + separate texture files) and `.glb` (single binary file) are supported.
 
 - **Procedural Blender materials**
 
@@ -166,8 +176,7 @@ Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no S
 
 #### Limitations
 
-- **Single material per import** — `from_gltf_file()` imports one material at a time (selected by `index`). A Blender export with multiple materials requires one call per material.
-- **No `.glb` support** — only `.gltf` (JSON + separate files) is supported. Binary `.glb` files bundle textures in a binary buffer that cannot be read without a full glTF binary parser.
+- **Single material per import** — `load_gltf()` / `from_gltf()` imports one material at a time (selected by `index`). A Blender export with multiple materials requires one call per material.
 - **Geometry is ignored** — only the material and its textures are imported. The mesh, nodes, and scene hierarchy are discarded.
 - **No UV transforms** — `KHR_texture_transform` on the Blender side (offset, rotation) is imported as `texture_repeat` for the scale component only. Offset and rotation are not supported.
 - **glTF defaults applied** — when `metallicFactor` or `roughnessFactor` are absent, glTF defaults (1.0) are used. This is correct for texture-driven materials where the scalar is a neutral multiplier.
@@ -177,7 +186,9 @@ Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no S
 
 ### 1 Three.js (internal format)
 
-The internal format uses Three.js `MeshPhysicalMaterial` property names. Both MaterialX and glTF import pipelines produce the same structure. Each property carries a `value`, a base64-encoded `texture`, or both:
+The internal format uses Three.js `MeshPhysicalMaterial` property names. Both MaterialX and glTF import pipelines produce the same structure. Each property carries a `value`, a `texture` reference (filename or data URI), or both.
+
+In memory, textures are stored as filenames relative to `_texture_dir`. When `to_dict()` is called (for the viewer), they are resolved to base64 data URIs:
 
 ```json
 {
@@ -254,7 +265,7 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 
 ### 2 glTF
 
-`to_gltf()` converts a single material to the glTF 2.0 JSON structure. `collect_gltf_textures()` does the same for multiple materials with shared, deduplicated textures. Both return the same schema and advanced material features are mapped to standard `KHR_materials_*` extensions:
+`to_gltf()` converts a single material to a `pygltflib.GLTF2` object. `collect_gltf_textures()` does the same for multiple materials with shared, deduplicated textures. `save_gltf()` writes to disk as `.gltf` (JSON + external texture files) or `.glb` (single binary). Advanced material features are mapped to standard `KHR_materials_*` extensions:
 
 | Feature                         | glTF extension                    |
 | ------------------------------- | --------------------------------- |
@@ -302,11 +313,26 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 
 **Usage**
 
-- Single material
+- Save to file
 
   ```python
   mat = Material.gpuopen.load("Car Paint")
-  gltf = mat.to_gltf()
+  mat.save_gltf("car-paint.gltf")   # .gltf + car-paint/ (texture files)
+  mat.save_gltf("car-paint.glb")    # single binary file
+  ```
+
+- Load from file
+
+  ```python
+  mat = Material.load_gltf("car-paint.gltf")   # .gltf or .glb
+  ```
+
+- In-memory GLTF2 object
+
+  ```python
+  gltf = mat.to_gltf()                          # pygltflib.GLTF2
+  mat = Material.from_gltf(gltf)                 # back to Material
+  mat = Material.from_gltf(gltf, index=1)        # second material
   ```
 
 - Multiple materials with texture deduplication
@@ -320,15 +346,7 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
       "glass": Material.physicallybased.load("Glass"),
   }
 
-  gltf = collect_gltf_textures(materials)
-  # Textures shared across materials are deduplicated in the images array.
-  ```
-
-- Import from glTF
-
-  ```python
-  mat = Material.from_gltf(gltf_data)           # first material
-  mat = Material.from_gltf(gltf_data, index=1)  # second material
+  gltf = collect_gltf_textures(materials)  # pygltflib.GLTF2
   ```
 
 - Texture repeat
@@ -368,23 +386,24 @@ Results
 - Original material (`m`):
 
   ```
-  color: value=[1.0, 1.0, 1.0], texture='data:image/png;base64,...'
-  metalness: value=1.0, texture='data:image/png;base64,...'
-  roughness: value=1.0, texture='data:image/png;base64,...'
-  normal: texture='data:image/png;base64,...'
+  _texture_dir: gpuopen_perforated_metal_1k
+  color: value=[1.0, 1.0, 1.0], texture='color.png'
+  metalness: value=1.0, texture='metalness.png'
+  roughness: value=1.0, texture='roughness.png'
+  normal: texture='normal.png'
   specularIntensity: value=1.0
   specularColor: value=[1.0, 1.0, 1.0]
   ior: value=1.5
-  opacity: texture='data:image/png;base64,...'
+  opacity: texture='opacity.png'
   ```
 
 - After round-trip (`m2`):
 
   ```
-  color: value=[1.0, 1.0, 1.0], texture='data:image/png;base64,...'
-  metalness: value=1.0, texture='data:image/png;base64,...'
-  roughness: value=1.0, texture='data:image/png;base64,...'
-  normal: texture='data:image/png;base64,...'
+  color: value=[1.0, 1.0, 1.0], texture='data:image/...;base64,...'
+  metalness: value=1.0, texture='data:image/...;base64,...'
+  roughness: value=1.0, texture='data:image/...;base64,...'
+  normal: texture='data:image/...;base64,...'
   ior: value=1.5
   alphaTest: value=0.5
   specularIntensity: value=1.0
@@ -503,34 +522,47 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
   ```
 
-- `Material.from_gltf_file(gltf_file, index=0) -> Material`
+- `Material.load_gltf(gltf_file, index=0) -> Material`
 
-  Import a material from a `.gltf` file on disk. Texture file paths are resolved relative to the file's directory and encoded as base64 data URIs. Ideal for importing Blender glTF exports.
-
-  ```python
-  mat = Material.from_gltf_file("brass_cube.gltf")
-  ```
-
-- `Material.from_gltf(gltf_data, index=0, base_dir=None) -> Material`
-
-  Import a material from a glTF dict (the same schema returned by `to_gltf()` and `collect_gltf_textures()`). Resolves texture indices back to base64 URIs. When `base_dir` is provided, file-path texture URIs are resolved relative to that directory. See [Three.js ↔ glTF conversion](#threejs--gltf-conversion) for round-trip behavior.
+  Load a material from a `.gltf` or `.glb` file on disk. Uses pygltflib to read the file and resolve textures automatically. Ideal for importing Blender glTF exports.
 
   ```python
-  mat = Material.from_gltf(gltf_data)           # first material
-  mat = Material.from_gltf(gltf_data, index=1)  # second material
+  mat = Material.load_gltf("brass_cube.gltf")   # or .glb
   ```
 
-- `material.to_gltf() -> dict`
+- `Material.from_gltf(gltf, index=0) -> Material`
 
-  Convert a single material to the glTF 2.0 JSON structure with `asset`, `images`, `samplers`, `textures`, and `materials` arrays. See [glTF](#gltf) for the full schema.
+  Import a material from a `pygltflib.GLTF2` object. Accepts both file-referenced and data-URI images (file references are converted to data URIs automatically). See [Three.js ↔ glTF conversion](#threejs--gltf-conversion) for round-trip behavior.
+
+  ```python
+  from pygltflib import GLTF2
+
+  gltf = GLTF2().load("scene.gltf")
+  mat = Material.from_gltf(gltf)             # first material
+  mat = Material.from_gltf(gltf, index=1)    # second material
+  ```
+
+- `material.to_gltf() -> GLTF2`
+
+  Convert a single material to a self-contained `pygltflib.GLTF2` object with data-URI textures. See [glTF](#gltf) for the schema.
 
   ```python
   gltf = mat.to_gltf()
   ```
 
-- `collect_gltf_textures(materials) -> dict`
+- `material.save_gltf(path, overwrite=False)`
 
-  Convert multiple materials to a glTF structure with shared, deduplicated textures. Returns the same schema as `to_gltf()`. See [glTF](#gltf) for details.
+  Save the material as a `.gltf` or `.glb` file. For `.gltf`, textures are written as separate files in a companion directory. For `.glb`, textures are embedded.
+
+  ```python
+  mat.save_gltf("wood.gltf")                      # wood.gltf + wood/color.png, ...
+  mat.save_gltf("wood.glb")                        # single binary file
+  mat.save_gltf("wood.gltf", overwrite=True)       # overwrite existing
+  ```
+
+- `collect_gltf_textures(materials) -> GLTF2`
+
+  Convert multiple materials to a `pygltflib.GLTF2` with shared, deduplicated textures. Returns the same type as `to_gltf()`. See [glTF](#gltf) for details.
 
   ```python
   from threejs_materials import Material, collect_gltf_textures
