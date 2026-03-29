@@ -32,10 +32,10 @@ class TestCollectGltfTextures:
         tex = _b64_png(200, 100, 50)
         mat = _sample(name="body", color={"value": [1, 1, 1], "texture": tex})
         g = collect_gltf_textures({"body": mat})
-        assert len(g["materials"]) == 1
-        assert g["materials"][0]["name"] == "body"
-        assert len(g["images"]) == 1
-        assert g["images"][0]["uri"] == tex
+        assert len(g.materials) == 1
+        assert g.materials[0].name == "body"
+        assert len(g.images) == 1
+        assert g.images[0].uri == tex
 
     def test_multiple_materials(self):
         tex1 = _b64_png(200, 100, 50)
@@ -43,10 +43,10 @@ class TestCollectGltfTextures:
         mat1 = _sample(name="a", color={"value": [1, 1, 1], "texture": tex1})
         mat2 = _sample(name="b", color={"value": [1, 1, 1], "texture": tex2})
         g = collect_gltf_textures({"a": mat1, "b": mat2})
-        assert len(g["materials"]) == 2
-        assert len(g["images"]) == 2
-        assert g["materials"][0]["name"] == "a"
-        assert g["materials"][1]["name"] == "b"
+        assert len(g.materials) == 2
+        assert len(g.images) == 2
+        assert g.materials[0].name == "a"
+        assert g.materials[1].name == "b"
 
     def test_texture_deduplication(self):
         tex = _b64_png(200, 100, 50)
@@ -54,54 +54,52 @@ class TestCollectGltfTextures:
         mat2 = _sample(name="b", color={"value": [0.5, 0.5, 0.5], "texture": tex})
         g = collect_gltf_textures({"a": mat1, "b": mat2})
         # Same texture → deduplicated to one image
-        assert len(g["images"]) == 1
+        assert len(g.images) == 1
         # Both materials reference index 0
-        idx_a = g["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]["index"]
-        idx_b = g["materials"][1]["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+        idx_a = g.materials[0].pbrMetallicRoughness.baseColorTexture.index
+        idx_b = g.materials[1].pbrMetallicRoughness.baseColorTexture.index
         assert idx_a == idx_b == 0
 
     def test_no_textures(self):
         mat = _sample(name="gold", color={"value": [1, 0.8, 0.3]})
         g = collect_gltf_textures({"gold": mat})
-        assert "images" not in g
-        assert "samplers" not in g
-        assert "textures" not in g
-        assert len(g["materials"]) == 1
+        assert len(g.images) == 0
+        assert len(g.materials) == 1
 
     def test_extensions_used_merged(self):
         mat1 = _sample(name="a", ior={"value": 1.45})
         mat2 = _sample(name="b", transmission={"value": 0.8})
         g = collect_gltf_textures({"a": mat1, "b": mat2})
-        assert "KHR_materials_ior" in g["extensionsUsed"]
-        assert "KHR_materials_transmission" in g["extensionsUsed"]
+        assert "KHR_materials_ior" in g.extensionsUsed
+        assert "KHR_materials_transmission" in g.extensionsUsed
 
     def test_samplers_present(self):
         tex = _b64_png()
         mat = _sample(name="x", color={"texture": tex})
         g = collect_gltf_textures({"x": mat})
-        assert len(g["samplers"]) == 1
-        assert g["samplers"][0]["magFilter"] == 9729
+        assert len(g.samplers) == 1
+        assert g.samplers[0].magFilter == 9729
 
     def test_textures_array(self):
         tex = _b64_png()
         mat = _sample(name="x", color={"texture": tex})
         g = collect_gltf_textures({"x": mat})
-        assert g["textures"][0]["source"] == 0
-        assert g["textures"][0]["sampler"] == 0
+        assert g.textures[0].source == 0
+        assert g.textures[0].sampler == 0
 
     def test_name_override(self):
         """Dict key overrides material.name."""
         mat = _sample(name="original")
         g = collect_gltf_textures({"override_name": mat})
-        assert g["materials"][0]["name"] == "override_name"
+        assert g.materials[0].name == "override_name"
 
     def test_texture_repeat(self):
         tex = _b64_png()
         mat = _sample(name="tiled", color={"texture": tex}).scale(2, 2)
         g = collect_gltf_textures({"tiled": mat})
-        bc_tex = g["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"]
-        assert bc_tex["extensions"]["KHR_texture_transform"]["scale"] == [0.5, 0.5]
-        assert "KHR_texture_transform" in g["extensionsUsed"]
+        bc_tex = g.materials[0].pbrMetallicRoughness.baseColorTexture
+        assert bc_tex.extensions["KHR_texture_transform"]["scale"] == [0.5, 0.5]
+        assert "KHR_texture_transform" in g.extensionsUsed
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +288,100 @@ class TestRoundTrip:
         g1 = mat.to_gltf()
         imported = Material.from_gltf(g1)
         g2 = imported.to_gltf()
-        m1 = g1["materials"][0]
-        m2 = g2["materials"][0]
-        assert m1["pbrMetallicRoughness"] == m2["pbrMetallicRoughness"]
-        assert m1.get("extensions") == m2.get("extensions")
+        m1 = g1.materials[0]
+        m2 = g2.materials[0]
+        assert m1.pbrMetallicRoughness.baseColorFactor == m2.pbrMetallicRoughness.baseColorFactor
+        assert m1.pbrMetallicRoughness.metallicFactor == m2.pbrMetallicRoughness.metallicFactor
+        assert m1.pbrMetallicRoughness.roughnessFactor == m2.pbrMetallicRoughness.roughnessFactor
+        assert m1.extensions == m2.extensions
+
+
+# ---------------------------------------------------------------------------
+# save_gltf overwrite handling
+# ---------------------------------------------------------------------------
+
+
+class TestSaveGltf:
+    def _mat_with_texture(self):
+        tex = _b64_png(200, 100, 50)
+        return _sample(color={"value": [1, 1, 1], "texture": tex})
+
+    def test_creates_gltf_and_texture_dir(self, tmp_path):
+        mat = self._mat_with_texture()
+        out = tmp_path / "wood.gltf"
+        mat.save_gltf(out)
+        assert out.exists()
+        tex_dir = tmp_path / "wood"
+        assert tex_dir.is_dir()
+        assert any(tex_dir.iterdir())
+
+    def test_creates_glb(self, tmp_path):
+        mat = self._mat_with_texture()
+        out = tmp_path / "wood.glb"
+        mat.save_gltf(out)
+        assert out.exists()
+        assert not (tmp_path / "wood").exists()
+
+    def test_no_overwrite_file_exists(self, tmp_path):
+        mat = self._mat_with_texture()
+        out = tmp_path / "wood.gltf"
+        out.write_text("{}")
+        with pytest.raises(FileExistsError, match="wood.gltf"):
+            mat.save_gltf(out)
+
+    def test_no_overwrite_tex_dir_exists(self, tmp_path):
+        mat = self._mat_with_texture()
+        out = tmp_path / "wood.gltf"
+        (tmp_path / "wood").mkdir()
+        with pytest.raises(FileExistsError, match="wood"):
+            mat.save_gltf(out)
+
+    def test_no_overwrite_tex_dir_is_file(self, tmp_path):
+        mat = self._mat_with_texture()
+        out = tmp_path / "wood.gltf"
+        (tmp_path / "wood").write_text("oops")
+        with pytest.raises(FileExistsError, match="wood"):
+            mat.save_gltf(out)
+
+    def test_overwrite_replaces_file(self, tmp_path):
+        mat = self._mat_with_texture()
+        out = tmp_path / "wood.gltf"
+        out.write_text("{}")
+        mat.save_gltf(out, overwrite=True)
+        assert out.stat().st_size > 2  # replaced with real content
+
+    def test_overwrite_replaces_textures_in_dir(self, tmp_path):
+        mat = self._mat_with_texture()
+        out = tmp_path / "wood.gltf"
+        tex_dir = tmp_path / "wood"
+        tex_dir.mkdir()
+        (tex_dir / "stale.png").write_text("old")
+        mat.save_gltf(out, overwrite=True)
+        assert out.exists()
+        assert tex_dir.is_dir()
+        # New texture files written
+        assert any(f.suffix == ".png" for f in tex_dir.iterdir())
+
+    def test_overwrite_tex_dir_is_file_raises(self, tmp_path):
+        mat = self._mat_with_texture()
+        out = tmp_path / "wood.gltf"
+        (tmp_path / "wood").write_text("oops")
+        with pytest.raises(FileExistsError, match="not a directory"):
+            mat.save_gltf(out, overwrite=True)
+
+    def test_gltf_file_round_trip(self, tmp_path):
+        """save_gltf → load_gltf preserves textures."""
+        mat = self._mat_with_texture()
+        out = tmp_path / "rt.gltf"
+        mat.save_gltf(out)
+        imported = Material.load_gltf(str(out))
+        assert "texture" in imported.properties["color"]
+        assert imported.properties["color"]["texture"].startswith("data:")
+
+    def test_glb_file_round_trip(self, tmp_path):
+        """save_gltf(.glb) → load_gltf preserves textures."""
+        mat = self._mat_with_texture()
+        out = tmp_path / "rt.glb"
+        mat.save_gltf(out)
+        imported = Material.load_gltf(str(out))
+        assert "texture" in imported.properties["color"]

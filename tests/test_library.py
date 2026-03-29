@@ -94,7 +94,7 @@ class TestMaterial:
         data["properties"]["color"]["texture"] = "data:image/png;base64," + "A" * 100
         mat = Material(data)
         r = repr(mat)
-        assert "texture='data:image/png;base64,...'" in r
+        assert "texture='data:image/...;base64,...'" in r
 
     def test_dump_gltf(self):
         data = _sample_data()
@@ -316,29 +316,27 @@ def _b64_png(r=128, g=128, b=128):
 
 
 class TestToGltf:
-    """Tests for to_gltf() which now returns the full glTF schema."""
+    """Tests for to_gltf() which now returns a pygltflib.GLTF2 object."""
 
     @staticmethod
     def _mat(g):
         """Extract the first material from a to_gltf() result."""
-        return g["materials"][0]
+        return g.materials[0]
 
     @staticmethod
     def _tex_uri(g, index):
         """Resolve a texture index to its image URI."""
-        src = g["textures"][index]["source"]
-        return g["images"][src]["uri"]
+        src = g.textures[index].source
+        return g.images[src].uri
 
     def test_schema_structure(self):
         mat = Material(_sample_data())
         g = mat.to_gltf()
-        assert "materials" in g
-        assert isinstance(g["materials"], list)
-        assert len(g["materials"]) == 1
+        assert len(g.materials) == 1
 
     def test_name(self):
         g = Material(_sample_data()).to_gltf()
-        assert self._mat(g)["name"] == "Test Material"
+        assert self._mat(g).name == "Test Material"
 
     def test_basic_pbr_values(self):
         data = _sample_data(properties={
@@ -347,10 +345,10 @@ class TestToGltf:
             "roughness": {"value": 0.4},
         })
         m = self._mat(Material(data).to_gltf())
-        pbr = m["pbrMetallicRoughness"]
-        assert pbr["baseColorFactor"] == [0.8, 0.2, 0.1, 1.0]
-        assert pbr["metallicFactor"] == 0.9
-        assert pbr["roughnessFactor"] == 0.4
+        pbr = m.pbrMetallicRoughness
+        assert pbr.baseColorFactor == [0.8, 0.2, 0.1, 1.0]
+        assert pbr.metallicFactor == 0.9
+        assert pbr.roughnessFactor == 0.4
 
     def test_base_color_factor_includes_opacity(self):
         data = _sample_data(properties={
@@ -358,7 +356,7 @@ class TestToGltf:
             "opacity": {"value": 0.5},
         })
         m = self._mat(Material(data).to_gltf())
-        assert m["pbrMetallicRoughness"]["baseColorFactor"] == [1.0, 1.0, 1.0, 0.5]
+        assert m.pbrMetallicRoughness.baseColorFactor == [1.0, 1.0, 1.0, 0.5]
 
     def test_color_texture(self):
         tex = _b64_png(200, 100, 50)
@@ -367,7 +365,7 @@ class TestToGltf:
         })
         g = Material(data).to_gltf()
         m = self._mat(g)
-        idx = m["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+        idx = m.pbrMetallicRoughness.baseColorTexture.index
         assert self._tex_uri(g, idx) == tex
 
     def test_opacity_texture_merged_into_base_color(self):
@@ -379,7 +377,7 @@ class TestToGltf:
         })
         g = Material(data).to_gltf()
         m = self._mat(g)
-        idx = m["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+        idx = m.pbrMetallicRoughness.baseColorTexture.index
         merged_uri = self._tex_uri(g, idx)
         assert merged_uri.startswith("data:image/png;base64,")
         assert merged_uri != color_tex
@@ -391,7 +389,7 @@ class TestToGltf:
         })
         g = Material(data).to_gltf()
         m = self._mat(g)
-        idx = m["pbrMetallicRoughness"]["baseColorTexture"]["index"]
+        idx = m.pbrMetallicRoughness.baseColorTexture.index
         assert self._tex_uri(g, idx).startswith("data:image/png;base64,")
 
     def test_opacity_texture_sets_mask_alpha_mode(self):
@@ -401,15 +399,15 @@ class TestToGltf:
             "opacity": {"texture": opacity_tex},
         })
         m = self._mat(Material(data).to_gltf())
-        assert m["alphaMode"] == "MASK"
-        assert m["alphaCutoff"] == 0.5
+        assert m.alphaMode == "MASK"
+        assert m.alphaCutoff == 0.5
 
     def test_normal_texture(self):
         tex = _b64_png(128, 128, 255)
         data = _sample_data(properties={"normal": {"texture": tex}})
         g = Material(data).to_gltf()
         m = self._mat(g)
-        idx = m["normalTexture"]["index"]
+        idx = m.normalTexture.index
         assert self._tex_uri(g, idx) == tex
 
     def test_normal_scale(self):
@@ -419,57 +417,57 @@ class TestToGltf:
             "normalScale": {"value": [0.5, 0.5]},
         })
         m = self._mat(Material(data).to_gltf())
-        assert m["normalTexture"]["scale"] == 0.5
+        assert m.normalTexture.scale == 0.5
 
     def test_occlusion_texture(self):
         tex = _b64_png(200, 200, 200)
         data = _sample_data(properties={"ao": {"texture": tex}})
         g = Material(data).to_gltf()
         m = self._mat(g)
-        idx = m["occlusionTexture"]["index"]
+        idx = m.occlusionTexture.index
         assert self._tex_uri(g, idx) == tex
 
     def test_emissive(self):
         data = _sample_data(properties={"emissive": {"value": [1.0, 0.5, 0.0]}})
         m = self._mat(Material(data).to_gltf())
-        assert m["emissiveFactor"] == [1.0, 0.5, 0.0]
+        assert m.emissiveFactor == [1.0, 0.5, 0.0]
 
     def test_alpha_mode_blend(self):
         data = _sample_data(properties={
             "opacity": {"value": 0.5}, "transparent": {"value": True},
         })
         m = self._mat(Material(data).to_gltf())
-        assert m["alphaMode"] == "BLEND"
+        assert m.alphaMode == "BLEND"
 
     def test_alpha_mode_mask(self):
         data = _sample_data(properties={"alphaTest": {"value": 0.3}})
         m = self._mat(Material(data).to_gltf())
-        assert m["alphaMode"] == "MASK"
-        assert m["alphaCutoff"] == 0.3
+        assert m.alphaMode == "MASK"
+        assert m.alphaCutoff == 0.3
 
     def test_double_sided(self):
         data = _sample_data(properties={"side": {"value": 2}})
         m = self._mat(Material(data).to_gltf())
-        assert m["doubleSided"] is True
+        assert m.doubleSided is True
 
     def test_no_double_sided_by_default(self):
         m = self._mat(Material(_sample_data()).to_gltf())
-        assert "doubleSided" not in m
+        assert m.doubleSided is False
 
     def test_extension_ior(self):
         data = _sample_data(properties={"ior": {"value": 1.45}})
         m = self._mat(Material(data).to_gltf())
-        assert m["extensions"]["KHR_materials_ior"]["ior"] == 1.45
+        assert m.extensions["KHR_materials_ior"]["ior"] == 1.45
 
     def test_default_ior_preserved(self):
         data = _sample_data(properties={"ior": {"value": 1.5}})
         m = self._mat(Material(data).to_gltf())
-        assert m["extensions"]["KHR_materials_ior"]["ior"] == 1.5
+        assert m.extensions["KHR_materials_ior"]["ior"] == 1.5
 
     def test_extension_transmission(self):
         data = _sample_data(properties={"transmission": {"value": 0.8}})
         m = self._mat(Material(data).to_gltf())
-        assert m["extensions"]["KHR_materials_transmission"]["transmissionFactor"] == 0.8
+        assert m.extensions["KHR_materials_transmission"]["transmissionFactor"] == 0.8
 
     def test_extension_volume(self):
         data = _sample_data(properties={
@@ -478,7 +476,7 @@ class TestToGltf:
             "attenuationDistance": {"value": 0.2},
         })
         m = self._mat(Material(data).to_gltf())
-        vol = m["extensions"]["KHR_materials_volume"]
+        vol = m.extensions["KHR_materials_volume"]
         assert vol["thicknessFactor"] == 0.5
         assert vol["attenuationColor"] == [0.9, 0.5, 0.1]
         assert vol["attenuationDistance"] == 0.2
@@ -488,7 +486,7 @@ class TestToGltf:
             "clearcoat": {"value": 0.8}, "clearcoatRoughness": {"value": 0.1},
         })
         m = self._mat(Material(data).to_gltf())
-        cc = m["extensions"]["KHR_materials_clearcoat"]
+        cc = m.extensions["KHR_materials_clearcoat"]
         assert cc["clearcoatFactor"] == 0.8
         assert cc["clearcoatRoughnessFactor"] == 0.1
 
@@ -498,7 +496,7 @@ class TestToGltf:
             "sheenRoughness": {"value": 0.3},
         })
         m = self._mat(Material(data).to_gltf())
-        sh = m["extensions"]["KHR_materials_sheen"]
+        sh = m.extensions["KHR_materials_sheen"]
         assert sh["sheenColorFactor"] == [0.9, 0.8, 0.7]
         assert sh["sheenRoughnessFactor"] == 0.3
 
@@ -508,7 +506,7 @@ class TestToGltf:
             "iridescenceThicknessRange": {"value": [100.0, 400.0]},
         })
         m = self._mat(Material(data).to_gltf())
-        iri = m["extensions"]["KHR_materials_iridescence"]
+        iri = m.extensions["KHR_materials_iridescence"]
         assert iri["iridescenceFactor"] == 1.0
         assert iri["iridescenceIor"] == 1.3
         assert iri["iridescenceThicknessMinimum"] == 100.0
@@ -519,7 +517,7 @@ class TestToGltf:
             "anisotropy": {"value": 0.5}, "anisotropyRotation": {"value": 1.57},
         })
         m = self._mat(Material(data).to_gltf())
-        an = m["extensions"]["KHR_materials_anisotropy"]
+        an = m.extensions["KHR_materials_anisotropy"]
         assert an["anisotropyStrength"] == 0.5
         assert an["anisotropyRotation"] == 1.57
 
@@ -529,7 +527,7 @@ class TestToGltf:
             "specularColor": {"value": [1.0, 0.9, 0.8]},
         })
         m = self._mat(Material(data).to_gltf())
-        sp = m["extensions"]["KHR_materials_specular"]
+        sp = m.extensions["KHR_materials_specular"]
         assert sp["specularFactor"] == 0.8
         assert sp["specularColorFactor"] == [1.0, 0.9, 0.8]
 
@@ -538,17 +536,17 @@ class TestToGltf:
             "emissive": {"value": [1.0, 1.0, 1.0]}, "emissiveIntensity": {"value": 2.0},
         })
         m = self._mat(Material(data).to_gltf())
-        assert m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"] == 2.0
+        assert m.extensions["KHR_materials_emissive_strength"]["emissiveStrength"] == 2.0
 
     def test_extension_dispersion(self):
         data = _sample_data(properties={"dispersion": {"value": 0.5}})
         m = self._mat(Material(data).to_gltf())
-        assert m["extensions"]["KHR_materials_dispersion"]["dispersion"] == 0.5
+        assert m.extensions["KHR_materials_dispersion"]["dispersion"] == 0.5
 
     def test_no_extensions_when_empty(self):
         data = _sample_data(properties={"color": {"value": [0.5, 0.5, 0.5]}})
         m = self._mat(Material(data).to_gltf())
-        assert "extensions" not in m
+        assert not m.extensions
 
     def test_displacement_not_mapped(self):
         tex = _b64_png()
@@ -556,14 +554,14 @@ class TestToGltf:
             "displacement": {"texture": tex}, "displacementScale": {"value": 0.1},
         })
         g = Material(data).to_gltf()
-        assert "displacement" not in str(g["materials"])
+        assert "displacement" not in g.to_json()
 
     def test_metallic_roughness_packed_texture(self):
         tex = _b64_png()
         data = _sample_data(properties={"metallicRoughness": {"texture": tex}})
         g = Material(data).to_gltf()
         m = self._mat(g)
-        idx = m["pbrMetallicRoughness"]["metallicRoughnessTexture"]["index"]
+        idx = m.pbrMetallicRoughness.metallicRoughnessTexture.index
         assert self._tex_uri(g, idx) == tex
 
     def test_extensions_used(self):
@@ -571,23 +569,21 @@ class TestToGltf:
             "ior": {"value": 1.45}, "transmission": {"value": 0.8},
         })
         g = Material(data).to_gltf()
-        assert "KHR_materials_ior" in g["extensionsUsed"]
-        assert "KHR_materials_transmission" in g["extensionsUsed"]
+        assert "KHR_materials_ior" in g.extensionsUsed
+        assert "KHR_materials_transmission" in g.extensionsUsed
 
     def test_samplers_and_textures_arrays(self):
         tex = _b64_png()
         data = _sample_data(properties={"color": {"texture": tex}})
         g = Material(data).to_gltf()
-        assert len(g["samplers"]) == 1
-        assert g["textures"][0]["source"] == 0
-        assert g["textures"][0]["sampler"] == 0
+        assert len(g.samplers) == 1
+        assert g.textures[0].source == 0
+        assert g.textures[0].sampler == 0
 
     def test_no_images_when_no_textures(self):
         data = _sample_data(properties={"color": {"value": [0.5, 0.5, 0.5]}})
         g = Material(data).to_gltf()
-        assert "images" not in g
-        assert "samplers" not in g
-        assert "textures" not in g
+        assert len(g.images) == 0
 
     def test_texture_repeat_as_khr_texture_transform(self):
         tex = _b64_png()
@@ -595,6 +591,6 @@ class TestToGltf:
         mat = Material(data).scale(2, 2)  # repeat = (0.5, 0.5)
         g = mat.to_gltf()
         m = self._mat(g)
-        bc_tex = m["pbrMetallicRoughness"]["baseColorTexture"]
-        assert bc_tex["extensions"]["KHR_texture_transform"]["scale"] == [0.5, 0.5]
-        assert "KHR_texture_transform" in g["extensionsUsed"]
+        bc_tex = m.pbrMetallicRoughness.baseColorTexture
+        assert bc_tex.extensions["KHR_texture_transform"]["scale"] == [0.5, 0.5]
+        assert "KHR_texture_transform" in g.extensionsUsed

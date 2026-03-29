@@ -256,10 +256,10 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
     def tex(name, mtlx_input):
         if mtlx_input not in t:
             return
-        tex_path = base_dir / t[mtlx_input]["file"]
+        tex_path = (base_dir / t[mtlx_input]["file"]).resolve()
         if tex_path.exists():
             entry = props.setdefault(name, {})
-            entry["texture"] = encode_texture_base64(tex_path)
+            entry["texture"] = tex_path.relative_to(base_dir.resolve()).as_posix()
             cs = t[mtlx_input].get("colorspace")
             if cs:
                 entry["colorSpace"] = cs
@@ -690,10 +690,11 @@ def _safe_copy(src: Path, dst_dir: Path) -> Path:
     return dst
 
 
-def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
+def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None, Path]:
     """Core pipeline: load → bake → extract → merge → properties.
 
-    Returns ``(properties_dict, shader_model)``.
+    Returns ``(properties_dict, shader_model, tex_dir)`` where *tex_dir*
+    is the directory containing baked texture files.
     """
     base_dir = mtlx_path.parent
     tex_dir = base_dir / "textures"
@@ -748,7 +749,7 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
                     if src_path.exists():
                         dst = _safe_copy(src_path, tex_dir)
                         mats[0]["textures"][inp_name] = dict(
-                            tex_info, file=str(dst.relative_to(base_dir)),
+                            tex_info, file=dst.relative_to(base_dir).as_posix(),
                         )
                     else:
                         for alt_ext in (".jpg", ".png", ".jpeg"):
@@ -756,7 +757,7 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
                             if alt_path.exists():
                                 dst = _safe_copy(alt_path, tex_dir)
                                 mats[0]["textures"][inp_name] = dict(
-                                    tex_info, file=str(dst.relative_to(base_dir)),
+                                    tex_info, file=dst.relative_to(base_dir).as_posix(),
                                 )
                                 break
 
@@ -771,4 +772,4 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None]:
 
     mat = mats[0]
     properties = to_threejs_physical(mat, base_dir)
-    return properties, mat.get("shader_model")
+    return properties, mat.get("shader_model"), base_dir

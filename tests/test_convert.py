@@ -716,7 +716,7 @@ class TestDisplacement:
         from threejs_materials.convert import _process_mtlx
 
         with caplog.at_level(logging.WARNING, logger="threejs_materials.convert"):
-            props, model = _process_mtlx(mtlx_file)
+            props, model, _tex_dir = _process_mtlx(mtlx_file)
 
         assert any("contains 2 materials" in r.message for r in caplog.records)
         assert props  # should still return first material's properties

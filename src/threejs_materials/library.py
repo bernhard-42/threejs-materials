@@ -1,12 +1,31 @@
 """Public API: load materials on demand with local JSON caching."""
 
+import base64
 import copy
+import hashlib
+import io
 import json
 import logging
-import re
+import mimetypes
 import shutil
 import tempfile
+import warnings
 from pathlib import Path
+from PIL import Image as PILImage
+from PIL import ImageColor
+
+from pygltflib import (
+    GLTF2,
+    ImageFormat,
+    Image as GltfImage,
+    NormalMaterialTexture,
+    OcclusionTextureInfo,
+    PbrMetallicRoughness,
+    Sampler,
+    Texture as GltfTexture,
+    TextureInfo,
+)
+from pygltflib import Material as GltfMaterial
 
 from threejs_materials.convert import (
     _process_mtlx,
@@ -19,7 +38,31 @@ log = logging.getLogger(__name__)
 
 CACHE_DIR = Path.home() / ".materialx-cache"
 
-_B64_RE = re.compile(r"(data:[^;]+;base64,).{30,}")
+
+def _is_data_uri(s: str) -> bool:
+    """Return True if *s* is a base64 data URI."""
+    return s.startswith("data:")
+
+
+def _resolve_to_data_uri(texture_ref: str, texture_dir: Path) -> str:
+    """Resolve a texture reference to a base64 data URI.
+
+    If *texture_ref* is already a data URI it is returned unchanged.
+    Otherwise it is treated as a filename relative to *texture_dir*
+    and the file is read and base64-encoded.
+    """
+    if _is_data_uri(texture_ref):
+        return texture_ref
+    file_path = texture_dir / texture_ref
+    mime, _ = mimetypes.guess_type(str(file_path))
+    if mime is None:
+        mime = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+        }.get(file_path.suffix.lower(), "application/octet-stream")
+    b64 = base64.b64encode(file_path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{b64}"
 
 
 def _abbreviate_textures(obj):
@@ -44,6 +87,54 @@ def _cache_path(source: str, name: str, resolution: str | None) -> Path:
     return CACHE_DIR / filename
 
 
+def _collect_textures(
+    properties: dict, tex_dir: Path | None, cache_tex_dir: Path
+) -> None:
+    """Copy texture files into *cache_tex_dir* and rewrite paths in *properties*.
+
+    Texture references in *properties* are either file paths relative to
+    *tex_dir* (new format from ``to_threejs_physical``) or base64 data URIs
+    (old format / non-baked sources).  File-path textures are copied to
+    *cache_tex_dir* and the references updated to just the filename.
+    Data-URI textures are decoded and written as files.
+    """
+    has_textures = False
+    for prop_name, prop in properties.items():
+        if isinstance(prop, dict) and "texture" in prop:
+            tex_ref = prop["texture"]
+            if _is_data_uri(tex_ref):
+                # Decode data URI and write to file
+                has_textures = True
+                if not cache_tex_dir.exists():
+                    cache_tex_dir.mkdir(parents=True)
+                # Determine extension from MIME type
+                header, b64 = tex_ref.split(",", 1)
+                mime = header.split(":")[1].split(";")[0]
+                ext = {
+                    "image/png": ".png",
+                    "image/jpeg": ".jpg",
+                }.get(mime, ".png")
+                fname = prop_name + ext
+                dst = cache_tex_dir / fname
+                dst.write_bytes(base64.b64decode(b64))
+                prop["texture"] = fname
+            elif tex_dir is not None:
+                # File path relative to tex_dir — copy to cache
+                src = tex_dir / tex_ref
+                if src.exists():
+                    has_textures = True
+                    if not cache_tex_dir.exists():
+                        cache_tex_dir.mkdir(parents=True)
+                    fname = prop_name + src.suffix
+                    dst = cache_tex_dir / fname
+                    shutil.copy2(src, dst)
+                    prop["texture"] = fname
+
+    if not has_textures and cache_tex_dir.exists():
+        # Clean up empty directory
+        shutil.rmtree(cache_tex_dir, ignore_errors=True)
+
+
 def _linear_to_srgb(c: float) -> float:
     """Convert a single linear RGB component to sRGB (0-1)."""
     c = max(0.0, min(1.0, c))
@@ -59,43 +150,43 @@ def _srgb_to_linear(c: float) -> float:
     return ((c + 0.055) / 1.055) ** 2.4
 
 
-def _has_real_alpha(data_uri: str) -> bool:
-    """Check if a base64-encoded texture has any non-opaque alpha pixels."""
-    import base64
-    import io
+def _open_texture_image(ref: str, texture_dir: Path | None = None):
+    """Open a texture as a PIL Image from a data URI or file path."""
+    if _is_data_uri(ref):
+        _, b64 = ref.split(",", 1)
+        return PILImage.open(io.BytesIO(base64.b64decode(b64)))
+    if texture_dir is not None:
+        return PILImage.open(texture_dir / ref)
+    return PILImage.open(ref)
 
-    from PIL import Image
 
-    _, b64 = data_uri.split(",", 1)
-    img = Image.open(io.BytesIO(base64.b64decode(b64)))
+def _has_real_alpha(ref: str, texture_dir: Path | None = None) -> bool:
+    """Check if a texture has any non-opaque alpha pixels."""
+    img = _open_texture_image(ref, texture_dir)
     if img.mode != "RGBA":
         return False
     alpha_min, _ = img.getchannel("A").getextrema()
     return alpha_min < 255
 
 
-def _merge_opacity_into_color(color_uri: str | None, opacity_uri: str) -> str:
+def _merge_opacity_into_color(
+    color_ref: str | None,
+    opacity_ref: str,
+    texture_dir: Path | None = None,
+) -> str:
     """Merge an RGB color texture and a grayscale opacity texture into RGBA PNG.
 
-    If *color_uri* is ``None`` a white RGB image at the opacity texture's
+    If *color_ref* is ``None`` a white RGB image at the opacity texture's
     resolution is used instead.  Returns a ``data:image/png;base64,...`` URI.
     """
-    import base64
-    import io
+    opacity_img = _open_texture_image(opacity_ref, texture_dir).convert("L")
 
-    from PIL import Image
-
-    _, op_b64 = opacity_uri.split(",", 1)
-    opacity_img = Image.open(io.BytesIO(base64.b64decode(op_b64))).convert("L")
-
-    if color_uri:
-        _, col_b64 = color_uri.split(",", 1)
-        color_img = Image.open(io.BytesIO(base64.b64decode(col_b64))).convert("RGB")
-        # Resize opacity to match color if dimensions differ
+    if color_ref:
+        color_img = _open_texture_image(color_ref, texture_dir).convert("RGB")
         if color_img.size != opacity_img.size:
-            opacity_img = opacity_img.resize(color_img.size, Image.LANCZOS)
+            opacity_img = opacity_img.resize(color_img.size, PILImage.LANCZOS)
     else:
-        color_img = Image.new("RGB", opacity_img.size, (255, 255, 255))
+        color_img = PILImage.new("RGB", opacity_img.size, (255, 255, 255))
 
     rgba = color_img.copy()
     rgba.putalpha(opacity_img)
@@ -106,17 +197,12 @@ def _merge_opacity_into_color(color_uri: str | None, opacity_uri: str) -> str:
     return f"data:image/png;base64,{b64}"
 
 
-def _average_texture_linear(data_uri: str) -> tuple[float, float, float]:
-    """Decode a base64 texture and return its average color in linear RGB."""
-    import base64
-    import io
-
-    from PIL import Image
-
-    _, b64 = data_uri.split(",", 1)
-    img = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
-    avg = img.resize((1, 1), Image.LANCZOS).getpixel((0, 0))
-    # Pixel values are sRGB 0-255; convert to linear 0-1
+def _average_texture_linear(
+    ref: str, texture_dir: Path | None = None
+) -> tuple[float, float, float]:
+    """Return the average color of a texture in linear RGB."""
+    img = _open_texture_image(ref, texture_dir).convert("RGB")
+    avg = img.resize((1, 1), PILImage.LANCZOS).getpixel((0, 0))
     r, g, b = (_srgb_to_linear(c / 255.0) for c in avg[:3])
     return (r, g, b)
 
@@ -126,8 +212,6 @@ def _parse_color_string(color: str) -> tuple[float, float, float]:
 
     Supports ``#rgb``, ``#rrggbb``, and CSS named colors (same set as Three.js).
     """
-    from PIL import ImageColor
-
     r, g, b = ImageColor.getrgb(color)
     return (
         _srgb_to_linear(r / 255.0),
@@ -137,324 +221,362 @@ def _parse_color_string(color: str) -> tuple[float, float, float]:
 
 
 # ---------------------------------------------------------------------------
-# glTF helpers
+# glTF helpers (pygltflib-based)
 # ---------------------------------------------------------------------------
 
-# Default sampler: LINEAR mag, LINEAR_MIPMAP_LINEAR min, REPEAT wrap
-_DEFAULT_SAMPLER = {
-    "magFilter": 9729,
-    "minFilter": 9987,
-    "wrapS": 10497,
-    "wrapT": 10497,
-}
+# WebGL / glTF sampler constants
+_GL_LINEAR = 9729
+_GL_LINEAR_MIPMAP_LINEAR = 9987
+_GL_REPEAT = 10497
+
+_DEFAULT_SAMPLER = Sampler(
+    magFilter=_GL_LINEAR,
+    minFilter=_GL_LINEAR_MIPMAP_LINEAR,
+    wrapS=_GL_REPEAT,
+    wrapT=_GL_REPEAT,
+)
 
 
-def _material_to_gltf(material: "Material") -> dict:
-    """Convert a single Material to a glTF material dict with inline URIs.
+class _GltfBuilder:
+    """Builds a self-contained ``pygltflib.GLTF2`` from Materials.
 
-    This is an internal helper — the URIs are later replaced with index
-    references by :func:`_finalize_gltf`.
+    File-path textures are resolved to base64 data URIs.  The resulting
+    object can be saved directly as ``.glb`` or converted to external
+    files via ``convert_images(ImageFormat.FILE)`` before saving as
+    ``.gltf``.
     """
-    props = material.properties
-    result: dict = {"name": material.name}
 
-    def _get(name: str) -> dict:
-        return props.get(name, {})
+    def __init__(self) -> None:
+        self.gltf = GLTF2(samplers=[copy.copy(_DEFAULT_SAMPLER)])
+        self._uri_to_index: dict[str, int] = {}
+        self._extensions_used: set[str] = set()
 
-    def _val(name: str):
-        return _get(name).get("value")
+    def _register_image(self, uri: str, name: str | None = None) -> int:
+        """Add a data-URI image (deduplicated) and return its texture index."""
+        h = hashlib.sha256(uri.encode("ascii", errors="replace")).hexdigest()
+        if h not in self._uri_to_index:
+            self._uri_to_index[h] = len(self.gltf.images)
+            mime = "image/png"
+            if _is_data_uri(uri):
+                mime = uri.split(":")[1].split(";")[0]
+            ext = {
+                "image/png": ".png",
+                "image/jpeg": ".jpg",
+            }.get(mime, ".png")
+            img_name = (name or f"texture_{len(self.gltf.images)}") + ext
+            self.gltf.images.append(GltfImage(uri=uri, mimeType=mime, name=img_name))
+            self.gltf.textures.append(
+                GltfTexture(source=len(self.gltf.images) - 1, sampler=0)
+            )
+        return self._uri_to_index[h]
 
-    def _tex(name: str) -> str | None:
-        return _get(name).get("texture")
-
-    def _tex_obj(name: str) -> dict | None:
-        uri = _tex(name)
-        if uri:
-            return {"uri": uri}
+    def _resolve_tex(self, ref: str | None, texture_dir: Path | None) -> str | None:
+        """Resolve a texture reference to a data URI."""
+        if ref is None:
+            return None
+        if _is_data_uri(ref):
+            return ref
+        if texture_dir is not None:
+            return _resolve_to_data_uri(ref, texture_dir)
         return None
 
-    # --- pbrMetallicRoughness ---
-    pbr: dict = {}
+    def _tex_ref(self, ti: TextureInfo | None) -> dict | None:
+        """Convert a TextureInfo to an extension-safe ``{"index": N, ...}`` dict."""
+        if ti is None:
+            return None
+        ref: dict = {"index": ti.index}
+        if ti.extensions:
+            ref["extensions"] = ti.extensions
+        return ref
 
-    color_val = _val("color")
-    opacity_val = _val("opacity")
-    alpha = float(opacity_val) if isinstance(opacity_val, (int, float)) else 1.0
-    if color_val is not None:
-        if isinstance(color_val, list):
-            pbr["baseColorFactor"] = color_val[:3] + [alpha]
+    def add_material(self, material: "Material", name: str | None = None) -> None:
+        """Convert a Material and append it to the GLTF2 document."""
+        props = material.properties
+        texture_dir = material._texture_dir
+        tex_repeat = material.texture_repeat
+
+        def val(prop_name: str):
+            return props.get(prop_name, {}).get("value")
+
+        def tex_uri(prop_name: str) -> str | None:
+            return self._resolve_tex(
+                props.get(prop_name, {}).get("texture"), texture_dir
+            )
+
+        def tex_info(prop_name: str) -> TextureInfo | None:
+            uri = tex_uri(prop_name)
+            if uri is None:
+                return None
+            ti = TextureInfo(index=self._register_image(uri, prop_name))
+            if tex_repeat is not None:
+                ti.extensions["KHR_texture_transform"] = {
+                    "scale": list(tex_repeat),
+                }
+                self._extensions_used.add("KHR_texture_transform")
+            return ti
+
+        pbr = self._build_pbr(val, tex_uri, tex_info, tex_repeat)
+        extensions = self._build_extensions(val, tex_uri, tex_info)
+
+        # Alpha mode
+        alpha_mode = "OPAQUE"
+        alpha_cutoff = None
+        alpha_test = val("alphaTest")
+        if alpha_test is not None:
+            alpha_mode = "MASK"
+            alpha_cutoff = alpha_test
+        elif val("transparent") is True:
+            alpha_mode = "BLEND"
+        elif props.get("opacity", {}).get("texture"):
+            alpha_mode = "MASK"
+            alpha_cutoff = 0.5
+
+        # Emissive
+        emissive_val = val("emissive")
+        emissive_factor = (
+            (emissive_val[:3] if isinstance(emissive_val, list) else [0.0, 0.0, 0.0])
+            if emissive_val is not None
+            else [0.0, 0.0, 0.0]
+        )
+
+        gmat = GltfMaterial(
+            name=name or material.name,
+            pbrMetallicRoughness=pbr,
+            normalTexture=self._build_normal(val, tex_uri, tex_repeat),
+            occlusionTexture=self._build_occlusion(tex_uri, tex_repeat),
+            emissiveFactor=emissive_factor,
+            emissiveTexture=tex_info("emissive"),
+            alphaMode=alpha_mode,
+            alphaCutoff=alpha_cutoff,
+            doubleSided=val("side") == 2,
+        )
+        if extensions:
+            gmat.extensions = extensions
+            self._extensions_used.update(extensions.keys())
+
+        self.gltf.materials.append(gmat)
+
+    def _build_pbr(self, val, tex_uri, tex_info, tex_repeat):
+        """Build PbrMetallicRoughness from internal properties."""
+        color_val = val("color")
+        opacity_val = val("opacity")
+        alpha = float(opacity_val) if isinstance(opacity_val, (int, float)) else 1.0
+
+        if color_val is not None and isinstance(color_val, list):
+            base_color_factor = color_val[:3] + [alpha]
+        elif color_val is not None or alpha < 1.0:
+            base_color_factor = [1.0, 1.0, 1.0, alpha]
         else:
-            pbr["baseColorFactor"] = [1.0, 1.0, 1.0, alpha]
-    elif alpha < 1.0:
-        pbr["baseColorFactor"] = [1.0, 1.0, 1.0, alpha]
+            base_color_factor = None
 
-    color_tex = _tex("color")
-    opacity_tex = _tex("opacity")
-    if color_tex and opacity_tex:
-        pbr["baseColorTexture"] = {
-            "uri": _merge_opacity_into_color(color_tex, opacity_tex)
-        }
-    elif opacity_tex:
-        pbr["baseColorTexture"] = {"uri": _merge_opacity_into_color(None, opacity_tex)}
-    elif color_tex:
-        pbr["baseColorTexture"] = {"uri": color_tex}
+        # Base color texture (may need opacity merge)
+        color_tex_uri = tex_uri("color")
+        opacity_tex_uri = tex_uri("opacity")
 
-    metalness_val = _val("metalness")
-    if metalness_val is not None:
-        pbr["metallicFactor"] = metalness_val
-    roughness_val = _val("roughness")
-    if roughness_val is not None:
-        pbr["roughnessFactor"] = roughness_val
+        if color_tex_uri and opacity_tex_uri:
+            merged = _merge_opacity_into_color(color_tex_uri, opacity_tex_uri)
+            base_color_texture = self._make_tex_info(merged, "color", tex_repeat)
+        elif opacity_tex_uri:
+            merged = _merge_opacity_into_color(None, opacity_tex_uri)
+            base_color_texture = self._make_tex_info(merged, "color", tex_repeat)
+        else:
+            base_color_texture = tex_info("color")
 
-    mr_tex = _tex_obj("metallicRoughness")
-    if mr_tex:
-        pbr["metallicRoughnessTexture"] = mr_tex
-    else:
-        m_tex = _tex_obj("metalness")
-        r_tex = _tex_obj("roughness")
-        if m_tex:
-            pbr["metallicRoughnessTexture"] = m_tex
-        elif r_tex:
-            pbr["metallicRoughnessTexture"] = r_tex
+        # Metallic-roughness texture
+        mr_ti = tex_info("metallicRoughness")
+        if not mr_ti:
+            mr_ti = tex_info("metalness") or tex_info("roughness")
 
-    if pbr:
-        result["pbrMetallicRoughness"] = pbr
-
-    # --- Top-level texture fields ---
-    normal_tex = _tex_obj("normal")
-    if normal_tex:
-        normal_scale = _val("normalScale")
-        if normal_scale is not None:
-            if isinstance(normal_scale, list):
-                normal_tex["scale"] = normal_scale[0]
-            else:
-                normal_tex["scale"] = normal_scale
-        result["normalTexture"] = normal_tex
-
-    ao_tex = _tex_obj("ao")
-    if ao_tex:
-        result["occlusionTexture"] = ao_tex
-
-    emissive_val = _val("emissive")
-    if emissive_val is not None:
-        result["emissiveFactor"] = (
-            emissive_val[:3] if isinstance(emissive_val, list) else emissive_val
+        return PbrMetallicRoughness(
+            baseColorFactor=base_color_factor or [1.0, 1.0, 1.0, 1.0],
+            baseColorTexture=base_color_texture,
+            metallicFactor=val("metalness") if val("metalness") is not None else 1.0,
+            roughnessFactor=val("roughness") if val("roughness") is not None else 1.0,
+            metallicRoughnessTexture=mr_ti,
         )
-    emissive_tex = _tex_obj("emissive")
-    if emissive_tex:
-        result["emissiveTexture"] = emissive_tex
 
-    # --- Alpha mode ---
-    alpha_test = _val("alphaTest")
-    transparent = _val("transparent")
-    if alpha_test is not None:
-        result["alphaMode"] = "MASK"
-        result["alphaCutoff"] = alpha_test
-    elif transparent is True:
-        result["alphaMode"] = "BLEND"
-    elif opacity_tex:
-        result["alphaMode"] = "MASK"
-        result["alphaCutoff"] = 0.5
-
-    # --- doubleSided ---
-    side = _val("side")
-    if side == 2:
-        result["doubleSided"] = True
-
-    # --- Extensions ---
-    extensions: dict = {}
-
-    ior = _val("ior")
-    if ior is not None:
-        extensions["KHR_materials_ior"] = {"ior": ior}
-
-    transmission = _val("transmission")
-    if transmission is not None and transmission > 0:
-        ext: dict = {"transmissionFactor": transmission}
-        t_tex = _tex_obj("transmission")
-        if t_tex:
-            ext["transmissionTexture"] = t_tex
-        extensions["KHR_materials_transmission"] = ext
-
-    volume: dict = {}
-    thickness = _val("thickness")
-    if thickness is not None and thickness > 0:
-        volume["thicknessFactor"] = thickness
-        t_tex = _tex_obj("thickness")
-        if t_tex:
-            volume["thicknessTexture"] = t_tex
-    att_color = _val("attenuationColor")
-    if att_color is not None:
-        volume["attenuationColor"] = (
-            att_color[:3] if isinstance(att_color, list) else att_color
-        )
-    att_dist = _val("attenuationDistance")
-    if att_dist is not None:
-        volume["attenuationDistance"] = att_dist
-    if volume:
-        extensions["KHR_materials_volume"] = volume
-
-    clearcoat = _val("clearcoat")
-    if clearcoat is not None and clearcoat > 0:
-        ext = {"clearcoatFactor": clearcoat}
-        cc_tex = _tex_obj("clearcoat")
-        if cc_tex:
-            ext["clearcoatTexture"] = cc_tex
-        cc_rough = _val("clearcoatRoughness")
-        if cc_rough is not None:
-            ext["clearcoatRoughnessFactor"] = cc_rough
-        cc_normal = _tex_obj("clearcoatNormal")
-        if cc_normal:
-            ext["clearcoatNormalTexture"] = cc_normal
-        extensions["KHR_materials_clearcoat"] = ext
-
-    sheen = _val("sheen")
-    if sheen is not None and sheen > 0:
-        ext = {}
-        sheen_color = _val("sheenColor")
-        if sheen_color is not None:
-            ext["sheenColorFactor"] = (
-                sheen_color[:3] if isinstance(sheen_color, list) else sheen_color
-            )
-        sc_tex = _tex_obj("sheenColor")
-        if sc_tex:
-            ext["sheenColorTexture"] = sc_tex
-        sheen_rough = _val("sheenRoughness")
-        if sheen_rough is not None:
-            ext["sheenRoughnessFactor"] = sheen_rough
-        extensions["KHR_materials_sheen"] = ext
-
-    iridescence = _val("iridescence")
-    if iridescence is not None and iridescence > 0:
-        ext = {"iridescenceFactor": iridescence}
-        iri_tex = _tex_obj("iridescence")
-        if iri_tex:
-            ext["iridescenceTexture"] = iri_tex
-        iri_ior = _val("iridescenceIOR")
-        if iri_ior is not None:
-            ext["iridescenceIor"] = iri_ior
-        iri_range = _val("iridescenceThicknessRange")
-        if (
-            iri_range is not None
-            and isinstance(iri_range, list)
-            and len(iri_range) == 2
-        ):
-            ext["iridescenceThicknessMinimum"] = iri_range[0]
-            ext["iridescenceThicknessMaximum"] = iri_range[1]
-        extensions["KHR_materials_iridescence"] = ext
-
-    anisotropy = _val("anisotropy")
-    if anisotropy is not None and anisotropy > 0:
-        ext = {"anisotropyStrength": anisotropy}
-        aniso_rot = _val("anisotropyRotation")
-        if aniso_rot is not None:
-            ext["anisotropyRotation"] = aniso_rot
-        extensions["KHR_materials_anisotropy"] = ext
-
-    spec_intensity = _val("specularIntensity")
-    spec_color = _val("specularColor")
-    if spec_intensity is not None or spec_color is not None:
-        ext = {}
-        if spec_intensity is not None:
-            ext["specularFactor"] = spec_intensity
-        si_tex = _tex_obj("specularIntensity")
-        if si_tex:
-            ext["specularTexture"] = si_tex
-        if spec_color is not None:
-            ext["specularColorFactor"] = (
-                spec_color[:3] if isinstance(spec_color, list) else spec_color
-            )
-        sc_tex = _tex_obj("specularColor")
-        if sc_tex:
-            ext["specularColorTexture"] = sc_tex
-        extensions["KHR_materials_specular"] = ext
-
-    emissive_intensity = _val("emissiveIntensity")
-    if emissive_intensity is not None and emissive_intensity != 1.0:
-        extensions["KHR_materials_emissive_strength"] = {
-            "emissiveStrength": emissive_intensity,
-        }
-
-    dispersion = _val("dispersion")
-    if dispersion is not None and dispersion > 0:
-        extensions["KHR_materials_dispersion"] = {"dispersion": dispersion}
-
-    if extensions:
-        result["extensions"] = extensions
-
-    return result
-
-
-def _finalize_gltf(
-    mat_dicts: list[dict],
-    texture_repeats: list[tuple | None],
-) -> dict:
-    """Convert a list of glTF material dicts with inline URIs into the
-    full glTF schema with shared ``images``/``textures``/``samplers`` arrays.
-
-    *texture_repeats* is a parallel list of ``(u, v)`` tuples (or ``None``)
-    corresponding to each material's texture repeat setting.
-    """
-    import hashlib
-
-    uri_to_index: dict[str, int] = {}
-    images: list[dict] = []
-
-    def _register_uri(uri: str) -> int:
-        h = hashlib.sha256(uri.encode("ascii", errors="replace")).hexdigest()
-        if h not in uri_to_index:
-            uri_to_index[h] = len(images)
-            images.append({"uri": uri})
-        return uri_to_index[h]
-
-    def _replace_uris(obj, tex_repeat):
-        """Recursively replace ``{"uri": "data:..."}`` with ``{"index": N}``."""
-        if isinstance(obj, dict):
-            if (
-                "uri" in obj
-                and isinstance(obj["uri"], str)
-                and obj["uri"].startswith("data:")
-            ):
-                uri = obj.pop("uri")
-                obj["index"] = _register_uri(uri)
-                # Apply KHR_texture_transform if texture_repeat is set
-                if tex_repeat is not None:
-                    obj.setdefault("extensions", {})["KHR_texture_transform"] = {
-                        "scale": list(tex_repeat),
-                    }
-                return
-            for v in obj.values():
-                _replace_uris(v, tex_repeat)
-        elif isinstance(obj, list):
-            for item in obj:
-                _replace_uris(item, tex_repeat)
-
-    # Collect extensions used across all materials
-    all_extensions: set[str] = set()
-    for mat_dict, tex_repeat in zip(mat_dicts, texture_repeats):
-        _replace_uris(mat_dict, tex_repeat)
+    def _make_tex_info(self, uri: str, name: str, tex_repeat) -> TextureInfo:
+        """Create a TextureInfo from a data URI, with optional texture transform."""
+        ti = TextureInfo(index=self._register_image(uri, name))
         if tex_repeat is not None:
-            all_extensions.add("KHR_texture_transform")
-        for ext_name in mat_dict.get("extensions", {}):
-            all_extensions.add(ext_name)
+            ti.extensions["KHR_texture_transform"] = {
+                "scale": list(tex_repeat),
+            }
+            self._extensions_used.add("KHR_texture_transform")
+        return ti
 
-    result: dict = {
-        "asset": {"version": "2.0", "generator": "threejs-materials"},
-        "materials": mat_dicts,
-    }
+    def _build_normal(self, val, tex_uri, tex_repeat):
+        """Build NormalMaterialTexture or return None."""
+        uri = tex_uri("normal")
+        if uri is None:
+            return None
+        scale = val("normalScale")
+        if isinstance(scale, list):
+            scale = scale[0]
+        nmt = NormalMaterialTexture(
+            index=self._register_image(uri, "normal"),
+            scale=scale if scale is not None else 1.0,
+        )
+        if tex_repeat is not None:
+            nmt.extensions["KHR_texture_transform"] = {
+                "scale": list(tex_repeat),
+            }
+            self._extensions_used.add("KHR_texture_transform")
+        return nmt
 
-    if images:
-        result["images"] = images
-        result["samplers"] = [dict(_DEFAULT_SAMPLER)]
-        result["textures"] = [{"source": i, "sampler": 0} for i in range(len(images))]
+    def _build_occlusion(self, tex_uri, tex_repeat):
+        """Build OcclusionTextureInfo or return None."""
+        uri = tex_uri("ao")
+        if uri is None:
+            return None
+        oti = OcclusionTextureInfo(index=self._register_image(uri, "ao"))
+        if tex_repeat is not None:
+            oti.extensions["KHR_texture_transform"] = {
+                "scale": list(tex_repeat),
+            }
+            self._extensions_used.add("KHR_texture_transform")
+        return oti
 
-    if all_extensions:
-        result["extensionsUsed"] = sorted(all_extensions)
+    def _build_extensions(self, val, tex_uri, tex_info) -> dict:
+        """Build the KHR material extensions dict."""
+        extensions: dict = {}
 
-    return result
+        ior = val("ior")
+        if ior is not None:
+            extensions["KHR_materials_ior"] = {"ior": ior}
+
+        transmission = val("transmission")
+        if transmission is not None and transmission > 0:
+            ext: dict = {"transmissionFactor": transmission}
+            if ref := self._tex_ref(tex_info("transmission")):
+                ext["transmissionTexture"] = ref
+            extensions["KHR_materials_transmission"] = ext
+
+        # Volume
+        volume: dict = {}
+        thickness = val("thickness")
+        if thickness is not None and thickness > 0:
+            volume["thicknessFactor"] = thickness
+            if ref := self._tex_ref(tex_info("thickness")):
+                volume["thicknessTexture"] = ref
+        att_color = val("attenuationColor")
+        if att_color is not None:
+            volume["attenuationColor"] = (
+                att_color[:3] if isinstance(att_color, list) else att_color
+            )
+        att_dist = val("attenuationDistance")
+        if att_dist is not None:
+            volume["attenuationDistance"] = att_dist
+        if volume:
+            extensions["KHR_materials_volume"] = volume
+
+        # Clearcoat
+        clearcoat = val("clearcoat")
+        if clearcoat is not None and clearcoat > 0:
+            ext = {"clearcoatFactor": clearcoat}
+            if ref := self._tex_ref(tex_info("clearcoat")):
+                ext["clearcoatTexture"] = ref
+            cc_rough = val("clearcoatRoughness")
+            if cc_rough is not None:
+                ext["clearcoatRoughnessFactor"] = cc_rough
+            cc_uri = tex_uri("clearcoatNormal")
+            if cc_uri is not None:
+                ext["clearcoatNormalTexture"] = {
+                    "index": self._register_image(cc_uri, "clearcoatNormal")
+                }
+            extensions["KHR_materials_clearcoat"] = ext
+
+        # Sheen
+        sheen = val("sheen")
+        if sheen is not None and sheen > 0:
+            ext = {}
+            sheen_color = val("sheenColor")
+            if sheen_color is not None:
+                ext["sheenColorFactor"] = (
+                    sheen_color[:3] if isinstance(sheen_color, list) else sheen_color
+                )
+            if ref := self._tex_ref(tex_info("sheenColor")):
+                ext["sheenColorTexture"] = ref
+            sheen_rough = val("sheenRoughness")
+            if sheen_rough is not None:
+                ext["sheenRoughnessFactor"] = sheen_rough
+            extensions["KHR_materials_sheen"] = ext
+
+        # Iridescence
+        iridescence = val("iridescence")
+        if iridescence is not None and iridescence > 0:
+            ext = {"iridescenceFactor": iridescence}
+            if ref := self._tex_ref(tex_info("iridescence")):
+                ext["iridescenceTexture"] = ref
+            iri_ior = val("iridescenceIOR")
+            if iri_ior is not None:
+                ext["iridescenceIor"] = iri_ior
+            iri_range = val("iridescenceThicknessRange")
+            if isinstance(iri_range, list) and len(iri_range) == 2:
+                ext["iridescenceThicknessMinimum"] = iri_range[0]
+                ext["iridescenceThicknessMaximum"] = iri_range[1]
+            extensions["KHR_materials_iridescence"] = ext
+
+        # Anisotropy
+        anisotropy = val("anisotropy")
+        if anisotropy is not None and anisotropy > 0:
+            ext = {"anisotropyStrength": anisotropy}
+            aniso_rot = val("anisotropyRotation")
+            if aniso_rot is not None:
+                ext["anisotropyRotation"] = aniso_rot
+            extensions["KHR_materials_anisotropy"] = ext
+
+        # Specular
+        spec_intensity = val("specularIntensity")
+        spec_color = val("specularColor")
+        if spec_intensity is not None or spec_color is not None:
+            ext = {}
+            if spec_intensity is not None:
+                ext["specularFactor"] = spec_intensity
+            if ref := self._tex_ref(tex_info("specularIntensity")):
+                ext["specularTexture"] = ref
+            if spec_color is not None:
+                ext["specularColorFactor"] = (
+                    spec_color[:3] if isinstance(spec_color, list) else spec_color
+                )
+            if ref := self._tex_ref(tex_info("specularColor")):
+                ext["specularColorTexture"] = ref
+            extensions["KHR_materials_specular"] = ext
+
+        # Emissive strength
+        emissive_intensity = val("emissiveIntensity")
+        if emissive_intensity is not None and emissive_intensity != 1.0:
+            extensions["KHR_materials_emissive_strength"] = {
+                "emissiveStrength": emissive_intensity,
+            }
+
+        # Dispersion
+        dispersion = val("dispersion")
+        if dispersion is not None and dispersion > 0:
+            extensions["KHR_materials_dispersion"] = {"dispersion": dispersion}
+
+        return extensions
+
+    def build(self) -> GLTF2:
+        """Finalize and return the GLTF2 document."""
+        self.gltf.extensionsUsed = sorted(self._extensions_used)
+        return self.gltf
 
 
-def collect_gltf_textures(materials: dict[str, "Material"]) -> dict:
-    """Convert multiple materials to a glTF structure with shared textures.
+def _build_gltf(
+    materials: list["Material"],
+    names: list[str] | None = None,
+) -> GLTF2:
+    """Build a self-contained ``pygltflib.GLTF2`` from one or more Materials."""
+    builder = _GltfBuilder()
+    for idx, material in enumerate(materials):
+        mat_name = names[idx] if names else None
+        builder.add_material(material, mat_name)
+    return builder.build()
+
+
+def collect_gltf_textures(materials: dict[str, "Material"]) -> GLTF2:
+    """Convert multiple materials to a ``pygltflib.GLTF2`` with shared textures.
 
     Parameters
     ----------
@@ -464,19 +586,13 @@ def collect_gltf_textures(materials: dict[str, "Material"]) -> dict:
 
     Returns
     -------
-    dict
-        Same schema as :meth:`Material.to_gltf` — ``images``,
-        ``samplers``, ``textures``, ``materials``, ``extensionsUsed``.
+    pygltflib.GLTF2
+        A glTF 2.0 document with materials, images, textures, and samplers.
         Textures shared across materials are deduplicated.
     """
-    mat_dicts = []
-    tex_repeats = []
-    for name, mat in materials.items():
-        d = _material_to_gltf(mat)
-        d["name"] = name
-        mat_dicts.append(d)
-        tex_repeats.append(mat.texture_repeat)
-    return _finalize_gltf(mat_dicts, tex_repeats)
+    mat_list = list(materials.values())
+    name_list = list(materials.keys())
+    return _build_gltf(mat_list, name_list)
 
 
 class _SourceLoader:
@@ -502,7 +618,12 @@ class _SourceLoader:
 
         cache_file = _cache_path(self._source, name, res_key)
         if cache_file.exists():
-            mat = Material(json.loads(cache_file.read_text()))
+            data = json.loads(cache_file.read_text())
+            # Resolve relative _texture_dir against JSON location
+            td = data.get("_texture_dir")
+            if td is not None:
+                data["_texture_dir"] = str((cache_file.parent / td).resolve())
+            mat = Material(data)
             print(f"{label}: loading from cache — License: {mat.license}")
             return mat
 
@@ -511,12 +632,18 @@ class _SourceLoader:
             result = self._module.fetch(name, res_key, Path(tmp))
             if result.mtlx_path:
                 print("baking ...", end=" ", flush=True)
-                properties, _ = _process_mtlx(result.mtlx_path)
+                properties, _, tex_dir = _process_mtlx(result.mtlx_path)
             else:
                 properties = result.properties
+                tex_dir = None
             for key, v in result.overrides.items():
                 if key in properties:
                     properties[key]["value"] = v
+
+            # Copy texture files to persistent cache directory
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache_tex_dir = cache_file.with_suffix("")  # strip .json
+            _collect_textures(properties, tex_dir, cache_tex_dir)
 
         output = {
             "id": name,
@@ -526,11 +653,16 @@ class _SourceLoader:
             "license": result.license,
             "properties": properties,
         }
+        # Store relative path in JSON, absolute in runtime Material
+        if cache_tex_dir.exists():
+            output["_texture_dir"] = cache_tex_dir.name  # relative for JSON
 
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps(output, indent=2))
         print(f"saving ... done — License: {result.license}")
 
+        # Use absolute path for the runtime Material
+        if cache_tex_dir.exists():
+            output["_texture_dir"] = str(cache_tex_dir)
         return Material(output)
 
     def __repr__(self):
@@ -548,6 +680,7 @@ class Material:
         "license",
         "properties",
         "texture_repeat",
+        "_texture_dir",
     )
 
     ambientcg = _SourceLoader(ambientcg, "ambientcg")
@@ -563,52 +696,252 @@ class Material:
         self.license: str = data["license"]
         self.properties: dict = data["properties"]
         self.texture_repeat: tuple | None = data.get("texture_repeat")
+        td = data.get("_texture_dir")
+        self._texture_dir: Path | None = Path(td) if td is not None else None
+
+    # -----------------------------------------------------------------------
+    # Factory methods
+    # -----------------------------------------------------------------------
 
     @classmethod
-    def list_sources(cls) -> None:
-        """Print available material sources with clickable URLs."""
-        loaders = [cls.ambientcg, cls.gpuopen, cls.polyhaven, cls.physicallybased]
-        width = max(len(l._source) for l in loaders)
-        print("Material sources:")
-        for loader in loaders:
-            label = f"Material.{loader._source}"
-            url = loader._module.BROWSE_URL
-            print(f"  {label:<{width + 10}}  {url}")
+    def from_gltf(
+        cls,
+        gltf: GLTF2,
+        index: int = 0,
+    ) -> "Material":
+        """Import a material from a ``pygltflib.GLTF2`` object.
 
-    @classmethod
-    def clear_cache(cls, name: str | None = None, source: str | None = None) -> int:
-        """Delete cached material files.
+        Accepts both file-referenced and data-URI images.  File
+        references are converted to data URIs automatically (requires
+        the GLTF2 to have been loaded via ``GLTF2().load()`` so that
+        pygltflib knows where the files are).
 
         Parameters
         ----------
-        name : str, optional
-            Only clear caches whose filename contains this name (case-insensitive).
-        source : str, optional
-            Only clear caches whose filename starts with this source prefix.
-
-        Returns
-        -------
-        int
-            Number of files deleted.
+        gltf : pygltflib.GLTF2
+            A glTF 2.0 document loaded from disk or built
+            programmatically.
+        index : int
+            Index into the ``materials`` array (default ``0``).
         """
-        if not CACHE_DIR.exists():
-            return 0
-        if name is None and source is None:
-            count = sum(1 for f in CACHE_DIR.iterdir() if f.is_file())
-            shutil.rmtree(CACHE_DIR)
-            return count
-        count = 0
-        for f in CACHE_DIR.iterdir():
-            if not f.is_file() or f.suffix != ".json":
-                continue
-            fname = f.name.lower()
-            if source and not fname.startswith(source.lower() + "_"):
-                continue
-            if name and name.lower().replace(" ", "_") not in fname:
-                continue
-            f.unlink()
-            count += 1
-        return count
+        # Convert any file-referenced images to data URIs
+        if any(img.uri and not _is_data_uri(img.uri) for img in (gltf.images or [])):
+            gltf.convert_images(ImageFormat.DATAURI)
+        images = gltf.images or []
+        textures_arr = gltf.textures or []
+        mat = gltf.materials[index]
+
+        def _resolve_tex_by_index(tex_idx: int | None) -> str | None:
+            """Resolve a texture index to a data URI."""
+            if tex_idx is None:
+                return None
+            if tex_idx >= len(textures_arr):
+                return None
+            tex_obj = textures_arr[tex_idx]
+            src = tex_obj.source
+            if src is None:
+                src = tex_idx
+            if src >= len(images):
+                return None
+            img = images[src]
+            if img.uri and _is_data_uri(img.uri):
+                return img.uri
+            return None
+
+        def _get_tex_repeat_from_info(ti) -> tuple | None:
+            """Extract KHR_texture_transform scale from a TextureInfo."""
+            if ti is None:
+                return None
+            exts = getattr(ti, "extensions", None) or {}
+            transform = exts.get("KHR_texture_transform")
+            if transform and "scale" in transform:
+                s = transform["scale"]
+                return (s[0], s[1])
+            return None
+
+        props: dict = {}
+
+        def val(name, value):
+            props.setdefault(name, {})["value"] = value
+
+        def tex(name, tex_idx):
+            uri = _resolve_tex_by_index(tex_idx)
+            if uri:
+                props.setdefault(name, {})["texture"] = uri
+
+        def tex_from_ext(name, ext_tex_ref):
+            """Resolve a texture from an extension dict entry like {"index": N}."""
+            if ext_tex_ref is None:
+                return
+            idx = ext_tex_ref.get("index") if isinstance(ext_tex_ref, dict) else None
+            if idx is not None:
+                tex(name, idx)
+
+        # --- pbrMetallicRoughness ---
+        pbr = mat.pbrMetallicRoughness
+        if pbr is None:
+            pbr = PbrMetallicRoughness()
+
+        bcf = pbr.baseColorFactor or [1.0, 1.0, 1.0, 1.0]
+        val("color", list(bcf[:3]))
+        if len(bcf) > 3 and bcf[3] < 1.0:
+            val("opacity", bcf[3])
+            val("transparent", True)
+
+        if pbr.baseColorTexture is not None:
+            tex("color", pbr.baseColorTexture.index)
+
+        val("metalness", pbr.metallicFactor)
+        val("roughness", pbr.roughnessFactor)
+
+        if pbr.metallicRoughnessTexture is not None:
+            mr_idx = pbr.metallicRoughnessTexture.index
+            tex("metalness", mr_idx)
+            tex("roughness", mr_idx)
+
+        # --- Top-level ---
+        if mat.normalTexture is not None:
+            tex("normal", mat.normalTexture.index)
+            if mat.normalTexture.scale != 1.0:
+                val("normalScale", [mat.normalTexture.scale, mat.normalTexture.scale])
+
+        if mat.occlusionTexture is not None:
+            tex("ao", mat.occlusionTexture.index)
+
+        if mat.emissiveFactor != [0.0, 0.0, 0.0]:
+            val("emissive", list(mat.emissiveFactor))
+        if mat.emissiveTexture is not None:
+            tex("emissive", mat.emissiveTexture.index)
+
+        # --- Alpha mode ---
+        if mat.alphaMode == "BLEND":
+            actually_transparent = True
+            color_uri = props.get("color", {}).get("texture")
+            if color_uri:
+                actually_transparent = _has_real_alpha(color_uri)
+            if actually_transparent:
+                val("transparent", True)
+        elif mat.alphaMode == "MASK":
+            val("alphaTest", mat.alphaCutoff if mat.alphaCutoff is not None else 0.5)
+
+        if mat.doubleSided:
+            val("side", 2)
+
+        # --- Extensions ---
+        exts = mat.extensions or {}
+
+        ext = exts.get("KHR_materials_ior", {})
+        if "ior" in ext:
+            val("ior", ext["ior"])
+
+        ext = exts.get("KHR_materials_transmission", {})
+        if "transmissionFactor" in ext:
+            val("transmission", ext["transmissionFactor"])
+        tex_from_ext("transmission", ext.get("transmissionTexture"))
+
+        ext = exts.get("KHR_materials_volume", {})
+        if "thicknessFactor" in ext:
+            val("thickness", ext["thicknessFactor"])
+        tex_from_ext("thickness", ext.get("thicknessTexture"))
+        if "attenuationColor" in ext:
+            val("attenuationColor", ext["attenuationColor"])
+        if "attenuationDistance" in ext:
+            val("attenuationDistance", ext["attenuationDistance"])
+
+        ext = exts.get("KHR_materials_clearcoat", {})
+        if "clearcoatFactor" in ext:
+            val("clearcoat", ext["clearcoatFactor"])
+        tex_from_ext("clearcoat", ext.get("clearcoatTexture"))
+        if "clearcoatRoughnessFactor" in ext:
+            val("clearcoatRoughness", ext["clearcoatRoughnessFactor"])
+        tex_from_ext("clearcoatNormal", ext.get("clearcoatNormalTexture"))
+
+        ext = exts.get("KHR_materials_sheen", {})
+        if "sheenColorFactor" in ext:
+            val("sheenColor", ext["sheenColorFactor"])
+            val("sheen", 1.0)
+        tex_from_ext("sheenColor", ext.get("sheenColorTexture"))
+        if "sheenRoughnessFactor" in ext:
+            val("sheenRoughness", ext["sheenRoughnessFactor"])
+
+        ext = exts.get("KHR_materials_iridescence", {})
+        if "iridescenceFactor" in ext:
+            val("iridescence", ext["iridescenceFactor"])
+        tex_from_ext("iridescence", ext.get("iridescenceTexture"))
+        if "iridescenceIor" in ext:
+            val("iridescenceIOR", ext["iridescenceIor"])
+        iri_min = ext.get("iridescenceThicknessMinimum")
+        iri_max = ext.get("iridescenceThicknessMaximum")
+        if iri_min is not None and iri_max is not None:
+            val("iridescenceThicknessRange", [iri_min, iri_max])
+
+        ext = exts.get("KHR_materials_anisotropy", {})
+        if "anisotropyStrength" in ext:
+            val("anisotropy", ext["anisotropyStrength"])
+        if "anisotropyRotation" in ext:
+            val("anisotropyRotation", ext["anisotropyRotation"])
+
+        ext = exts.get("KHR_materials_specular", {})
+        if "specularFactor" in ext:
+            val("specularIntensity", ext["specularFactor"])
+        tex_from_ext("specularIntensity", ext.get("specularTexture"))
+        if "specularColorFactor" in ext:
+            val("specularColor", ext["specularColorFactor"])
+        tex_from_ext("specularColor", ext.get("specularColorTexture"))
+
+        ext = exts.get("KHR_materials_emissive_strength", {})
+        if "emissiveStrength" in ext:
+            val("emissiveIntensity", ext["emissiveStrength"])
+
+        ext = exts.get("KHR_materials_dispersion", {})
+        if "dispersion" in ext:
+            val("dispersion", ext["dispersion"])
+
+        # --- Texture repeat from KHR_texture_transform ---
+        texture_repeat = None
+        for ti in [
+            pbr.baseColorTexture if pbr else None,
+            pbr.metallicRoughnessTexture if pbr else None,
+            mat.normalTexture,
+            mat.occlusionTexture,
+            mat.emissiveTexture,
+        ]:
+            tr = _get_tex_repeat_from_info(ti)
+            if tr is not None:
+                texture_repeat = tr
+                break
+
+        name = mat.name or f"material_{index}"
+        data = {
+            "id": name,
+            "name": name,
+            "source": "gltf",
+            "url": "",
+            "license": "",
+            "properties": props,
+        }
+        if texture_repeat is not None:
+            data["texture_repeat"] = texture_repeat
+        return cls(data)
+
+    @classmethod
+    def load_gltf(cls, gltf_file: str, index: int = 0) -> "Material":
+        """Import a material from a ``.gltf`` or ``.glb`` file on disk.
+
+        Convenience wrapper for :meth:`from_gltf` that loads the file
+        first.
+
+        Parameters
+        ----------
+        gltf_file : str
+            Path to a ``.gltf`` or ``.glb`` file.
+        index : int
+            Index into the ``materials`` array (default ``0``).
+        """
+        gltf_path = Path(gltf_file).resolve()
+        if not gltf_path.exists():
+            raise FileNotFoundError(f"File not found: {gltf_path}")
+        return cls.from_gltf(GLTF2().load(str(gltf_path)), index=index)
 
     @classmethod
     def from_mtlx(cls, mtlx_file: str) -> "Material":
@@ -640,265 +973,22 @@ class Material:
 
         baked_mtlx = mtlx_path.parent / "material.baked.mtlx"
         try:
-            properties, _ = _process_mtlx(mtlx_path)
+            properties, _, tex_dir = _process_mtlx(mtlx_path)
         finally:
             baked_mtlx.unlink(missing_ok=True)
 
         name = mtlx_path.stem
-        return cls({
-            "id": name,
-            "name": name,
-            "source": "local",
-            "url": "",
-            "license": "",
-            "properties": properties,
-        })
-
-    @classmethod
-    def from_gltf_file(cls, gltf_file: str, index: int = 0) -> "Material":
-        """Import a material from a ``.gltf`` file on disk.
-
-        Texture file paths in the glTF are resolved relative to the
-        file's directory and encoded as base64 data URIs.
-
-        Parameters
-        ----------
-        gltf_file : str
-            Path to a ``.gltf`` JSON file.
-        index : int
-            Index into the ``materials`` array (default ``0``).
-        """
-        gltf_path = Path(gltf_file).resolve()
-        if not gltf_path.exists():
-            raise FileNotFoundError(f"File not found: {gltf_path}")
-        gltf_data = json.loads(gltf_path.read_text())
-        return cls.from_gltf(gltf_data, index=index, base_dir=gltf_path.parent)
-
-    @classmethod
-    def from_gltf(
-        cls,
-        gltf_data: dict,
-        index: int = 0,
-        base_dir: Path | str | None = None,
-    ) -> "Material":
-        """Import a material from a glTF structure.
-
-        Parameters
-        ----------
-        gltf_data : dict
-            A glTF dict with ``images``, ``textures``, and ``materials``
-            arrays — the same schema returned by :meth:`to_gltf` and
-            :func:`collect_gltf_textures`, or parsed from a ``.gltf`` file.
-        index : int
-            Index into the ``materials`` array (default ``0``).
-        base_dir : Path or str, optional
-            Directory for resolving relative texture file paths.  Required
-            when importing a glTF file that references textures by filename
-            (e.g. Blender exports).  Not needed when textures are inline
-            base64 data URIs.
-        """
-        from threejs_materials.convert import encode_texture_base64
-
-        if base_dir is not None:
-            base_dir = Path(base_dir)
-
-        images = gltf_data.get("images", [])
-        textures_arr = gltf_data.get("textures", [])
-        mat = gltf_data["materials"][index]
-
-        def _resolve_image_uri(uri: str) -> str | None:
-            """Resolve an image URI to a base64 data URI."""
-            from urllib.parse import unquote
-
-            if uri.startswith("data:"):
-                return uri
-            # File path — URL-decode and resolve relative to base_dir
-            if base_dir is not None:
-                file_path = base_dir / unquote(uri)
-                if file_path.exists():
-                    return encode_texture_base64(file_path)
-            return None
-
-        def _resolve_tex(tex_ref: dict | None) -> str | None:
-            """Resolve a texture reference to a data URI."""
-            if tex_ref is None:
-                return None
-            if "uri" in tex_ref:
-                return _resolve_image_uri(tex_ref["uri"])
-            idx = tex_ref.get("index")
-            if idx is not None and idx < len(textures_arr):
-                src = textures_arr[idx].get("source", idx)
-                if src < len(images):
-                    uri = images[src].get("uri")
-                    if uri:
-                        return _resolve_image_uri(uri)
-            return None
-
-        def _get_tex_repeat(tex_ref: dict | None) -> tuple | None:
-            """Extract KHR_texture_transform scale from a texture ref."""
-            if tex_ref is None:
-                return None
-            transform = (tex_ref.get("extensions") or {}).get("KHR_texture_transform")
-            if transform and "scale" in transform:
-                s = transform["scale"]
-                return (s[0], s[1])
-            return None
-
-        props: dict = {}
-
-        def val(name, value):
-            props.setdefault(name, {})["value"] = value
-
-        def tex(name, tex_ref):
-            uri = _resolve_tex(tex_ref)
-            if uri:
-                props.setdefault(name, {})["texture"] = uri
-
-        # --- pbrMetallicRoughness ---
-        # glTF defaults: baseColorFactor=[1,1,1,1], metallicFactor=1, roughnessFactor=1
-        pbr = mat.get("pbrMetallicRoughness", {})
-
-        bcf = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
-        val("color", bcf[:3])
-        if len(bcf) > 3 and bcf[3] < 1.0:
-            val("opacity", bcf[3])
-            val("transparent", True)
-
-        tex("color", pbr.get("baseColorTexture"))
-
-        val("metalness", pbr.get("metallicFactor", 1.0))
-        val("roughness", pbr.get("roughnessFactor", 1.0))
-
-        mr_tex_ref = pbr.get("metallicRoughnessTexture")
-        tex("metalness", mr_tex_ref)
-        tex("roughness", mr_tex_ref)
-
-        # --- Top-level ---
-        normal_ref = mat.get("normalTexture")
-        tex("normal", normal_ref)
-        if normal_ref and "scale" in normal_ref:
-            val("normalScale", [normal_ref["scale"], normal_ref["scale"]])
-
-        tex("ao", mat.get("occlusionTexture"))
-
-        if "emissiveFactor" in mat:
-            val("emissive", mat["emissiveFactor"])
-        tex("emissive", mat.get("emissiveTexture"))
-
-        # --- Alpha mode ---
-        alpha_mode = mat.get("alphaMode")
-        if alpha_mode == "BLEND":
-            # Check if the baseColor texture alpha is actually non-opaque.
-            # Blender sometimes exports alphaMode=BLEND even when the alpha
-            # channel is fully opaque (255 everywhere) — skip in that case.
-            actually_transparent = True
-            color_uri = props.get("color", {}).get("texture")
-            if color_uri and color_uri.startswith("data:"):
-                actually_transparent = _has_real_alpha(color_uri)
-            if actually_transparent:
-                val("transparent", True)
-        elif alpha_mode == "MASK":
-            val("alphaTest", mat.get("alphaCutoff", 0.5))
-
-        if mat.get("doubleSided"):
-            val("side", 2)
-
-        # --- Extensions ---
-        exts = mat.get("extensions", {})
-
-        ext = exts.get("KHR_materials_ior", {})
-        if "ior" in ext:
-            val("ior", ext["ior"])
-
-        ext = exts.get("KHR_materials_transmission", {})
-        if "transmissionFactor" in ext:
-            val("transmission", ext["transmissionFactor"])
-        tex("transmission", ext.get("transmissionTexture"))
-
-        ext = exts.get("KHR_materials_volume", {})
-        if "thicknessFactor" in ext:
-            val("thickness", ext["thicknessFactor"])
-        tex("thickness", ext.get("thicknessTexture"))
-        if "attenuationColor" in ext:
-            val("attenuationColor", ext["attenuationColor"])
-        if "attenuationDistance" in ext:
-            val("attenuationDistance", ext["attenuationDistance"])
-
-        ext = exts.get("KHR_materials_clearcoat", {})
-        if "clearcoatFactor" in ext:
-            val("clearcoat", ext["clearcoatFactor"])
-        tex("clearcoat", ext.get("clearcoatTexture"))
-        if "clearcoatRoughnessFactor" in ext:
-            val("clearcoatRoughness", ext["clearcoatRoughnessFactor"])
-        tex("clearcoatNormal", ext.get("clearcoatNormalTexture"))
-
-        ext = exts.get("KHR_materials_sheen", {})
-        if "sheenColorFactor" in ext:
-            val("sheenColor", ext["sheenColorFactor"])
-            val("sheen", 1.0)
-        tex("sheenColor", ext.get("sheenColorTexture"))
-        if "sheenRoughnessFactor" in ext:
-            val("sheenRoughness", ext["sheenRoughnessFactor"])
-
-        ext = exts.get("KHR_materials_iridescence", {})
-        if "iridescenceFactor" in ext:
-            val("iridescence", ext["iridescenceFactor"])
-        tex("iridescence", ext.get("iridescenceTexture"))
-        if "iridescenceIor" in ext:
-            val("iridescenceIOR", ext["iridescenceIor"])
-        iri_min = ext.get("iridescenceThicknessMinimum")
-        iri_max = ext.get("iridescenceThicknessMaximum")
-        if iri_min is not None and iri_max is not None:
-            val("iridescenceThicknessRange", [iri_min, iri_max])
-
-        ext = exts.get("KHR_materials_anisotropy", {})
-        if "anisotropyStrength" in ext:
-            val("anisotropy", ext["anisotropyStrength"])
-        if "anisotropyRotation" in ext:
-            val("anisotropyRotation", ext["anisotropyRotation"])
-
-        ext = exts.get("KHR_materials_specular", {})
-        if "specularFactor" in ext:
-            val("specularIntensity", ext["specularFactor"])
-        tex("specularIntensity", ext.get("specularTexture"))
-        if "specularColorFactor" in ext:
-            val("specularColor", ext["specularColorFactor"])
-        tex("specularColor", ext.get("specularColorTexture"))
-
-        ext = exts.get("KHR_materials_emissive_strength", {})
-        if "emissiveStrength" in ext:
-            val("emissiveIntensity", ext["emissiveStrength"])
-
-        ext = exts.get("KHR_materials_dispersion", {})
-        if "dispersion" in ext:
-            val("dispersion", ext["dispersion"])
-
-        # --- Texture repeat from KHR_texture_transform ---
-        texture_repeat = None
-        for tex_ref in [
-            pbr.get("baseColorTexture"),
-            pbr.get("metallicRoughnessTexture"),
-            mat.get("normalTexture"),
-            mat.get("occlusionTexture"),
-            mat.get("emissiveTexture"),
-        ]:
-            tr = _get_tex_repeat(tex_ref)
-            if tr is not None:
-                texture_repeat = tr
-                break
-
-        name = mat.get("name", f"material_{index}")
-        data = {
-            "id": name,
-            "name": name,
-            "source": "gltf",
-            "url": "",
-            "license": "",
-            "properties": props,
-        }
-        if texture_repeat is not None:
-            data["texture_repeat"] = texture_repeat
-        return cls(data)
+        return cls(
+            {
+                "id": name,
+                "name": name,
+                "source": "local",
+                "url": "",
+                "license": "",
+                "properties": properties,
+                "_texture_dir": str(tex_dir),
+            }
+        )
 
     @classmethod
     def create(
@@ -978,16 +1068,17 @@ class Material:
                 roughness_map="bakes/Cube_Roughness.png",
             )
         """
-        from threejs_materials.convert import encode_texture_base64
+        texture_dirs: list[Path] = []
 
         def _resolve_texture(tex: str | None) -> str | None:
             if tex is None:
                 return None
             if tex.startswith("data:"):
                 return tex
-            p = Path(tex)
+            p = Path(tex).resolve()
             if p.exists():
-                return encode_texture_base64(p)
+                texture_dirs.append(p.parent)
+                return p.name  # store just the filename
             raise FileNotFoundError(f"Texture file not found: {tex}")
 
         props: dict = {}
@@ -1082,14 +1173,25 @@ class Material:
                 elif prop_name in ("metalness", "roughness") and prop_name in props:
                     props[prop_name]["value"] = 1.0
 
-        return cls({
+        data = {
             "id": id,
             "name": id,
             "source": "custom",
             "url": "",
             "license": "",
             "properties": props,
-        })
+        }
+        if texture_dirs:
+            # All texture files must be in the same directory
+            common = texture_dirs[0]
+            if not all(d == common for d in texture_dirs):
+                raise ValueError("All texture files must be in the same directory")
+            data["_texture_dir"] = str(common)
+        return cls(data)
+
+    # -----------------------------------------------------------------------
+    # Transforms
+    # -----------------------------------------------------------------------
 
     def override(
         self,
@@ -1124,8 +1226,6 @@ class Material:
         the solid color value.  A warning is logged so the caller knows
         the texture was dropped.
         """
-        import warnings
-
         props = {
             k: v
             for k, v in {
@@ -1164,7 +1264,7 @@ class Material:
                     stacklevel=2,
                 )
             new_props.setdefault(key, {})["value"] = value
-        data = self.to_dict()
+        data = self._raw_data()
         data["properties"] = new_props
         return Material(data)
 
@@ -1179,22 +1279,48 @@ class Material:
         u, v : float
             Scale factors for the U and V axes.
         """
-        data = self.to_dict()
+        data = self._raw_data()
         data["texture_repeat"] = (1.0 / u, 1.0 / v)
         return Material(data)
 
-    def to_dict(self) -> dict:
-        """Return the full material as a plain dict (including complete base64 textures)."""
+    def _raw_data(self) -> dict:
+        """Return a raw data dict preserving file-path texture references."""
         d = {
             "id": self.id,
             "name": self.name,
             "source": self.source,
             "url": self.url,
             "license": self.license,
-            "properties": self.properties,
+            "properties": copy.deepcopy(self.properties),
         }
         if self.texture_repeat is not None:
-            d["textureRepeat"] = list(self.texture_repeat)
+            d["texture_repeat"] = self.texture_repeat
+        if self._texture_dir is not None:
+            d["_texture_dir"] = str(self._texture_dir)
+        return d
+
+    # -----------------------------------------------------------------------
+    # Serialization: Three.js output
+    # -----------------------------------------------------------------------
+
+    def to_dict(self) -> dict:
+        """Return the full material as a plain dict with base64 data-URI textures.
+
+        File-path texture references are resolved to base64 data URIs
+        so the result is self-contained and ready for the viewer.
+        """
+        d = self._raw_data()
+        if self._texture_dir:
+            for prop in d["properties"].values():
+                if isinstance(prop, dict) and "texture" in prop:
+                    tex = prop["texture"]
+                    if not _is_data_uri(tex):
+                        prop["texture"] = _resolve_to_data_uri(tex, self._texture_dir)
+        # Use camelCase key for external consumers
+        tr = d.pop("texture_repeat", None)
+        if tr is not None:
+            d["textureRepeat"] = list(tr)
+        d.pop("_texture_dir", None)
         return d
 
     def to_json(self, **kwargs) -> str:
@@ -1202,20 +1328,65 @@ class Material:
         kwargs.setdefault("indent", 2)
         return json.dumps(self.to_dict(), **kwargs)
 
-    def to_gltf(self) -> dict:
-        """Convert to a glTF 2.0 material structure.
+    # -----------------------------------------------------------------------
+    # Serialization: glTF I/O
+    # -----------------------------------------------------------------------
 
-        Returns a dict with ``images``, ``samplers``, ``textures``,
-        ``materials``, and ``extensionsUsed`` arrays — the same schema
-        produced by :func:`collect_gltf_textures` for multiple materials.
+    def to_gltf(self) -> GLTF2:
+        """Convert to a ``pygltflib.GLTF2`` document.
 
-        Properties with no glTF equivalent (``displacement``,
-        ``displacementScale``) are silently dropped.
+        Returns a self-contained glTF 2.0 document with materials, images,
+        textures, and samplers.  Properties with no glTF equivalent
+        (``displacement``, ``displacementScale``) are silently dropped.
         """
-        return _finalize_gltf(
-            [_material_to_gltf(self)],
-            [self.texture_repeat],
-        )
+        return _build_gltf([self])
+
+    def save_gltf(self, path: str | Path, *, overwrite: bool = False) -> None:
+        """Save the material as a ``.gltf`` or ``.glb`` file.
+
+        The format is chosen automatically from the file extension.
+        For ``.gltf``, textures are written as separate files in a
+        companion directory (e.g. ``wood.gltf`` + ``wood/color.png``).
+        For ``.glb``, textures are embedded in the binary file.
+
+        Parameters
+        ----------
+        path : str or Path
+            Output file path (``.gltf`` or ``.glb``).
+        overwrite : bool
+            If ``False`` (default), raise ``FileExistsError`` when *path*
+            or its companion texture directory already exist.  If ``True``,
+            overwrite the file and texture files in the directory.
+        """
+        path = Path(path)
+        is_gltf = path.suffix.lower() == ".gltf"
+
+        if not overwrite and path.exists():
+            raise FileExistsError(f"File already exists: {path}")
+
+        gltf = self.to_gltf()  # always data URIs
+
+        if is_gltf and gltf.images:
+            tex_dir = path.with_suffix("")  # e.g. wood.gltf → wood/
+            if not overwrite and tex_dir.exists():
+                raise FileExistsError(f"Companion path already exists: {tex_dir}")
+            if tex_dir.exists() and not tex_dir.is_dir():
+                raise FileExistsError(
+                    f"Cannot overwrite: {tex_dir} exists and is not a directory"
+                )
+            # Let pygltflib extract data URIs to external files
+            tex_dir.mkdir(parents=True, exist_ok=True)
+            gltf.convert_images(ImageFormat.FILE, path=str(tex_dir), override=overwrite)
+            # Make URIs relative to the .gltf file
+            for img in gltf.images:
+                if img.uri and not _is_data_uri(img.uri):
+                    img.uri = path.stem + "/" + img.uri
+
+        gltf.save(str(path))
+
+    # -----------------------------------------------------------------------
+    # Display
+    # -----------------------------------------------------------------------
 
     def dump(self, gltf: bool = False, json_format: bool = False) -> str:
         """Return a human-readable summary of the material properties.
@@ -1225,15 +1396,20 @@ class Material:
         the output is valid JSON with textures abbreviated.
         """
         if json_format:
-            data = self.to_gltf() if gltf else self.to_dict()
+            if gltf:
+                data = json.loads(self.to_gltf().to_json())
+            else:
+                data = self.to_dict()
             return json.dumps(_abbreviate_textures(data), indent=2)
 
         lines = [
             f"Material(name={self.name!r}, source={self.source!r}, "
             f"license={self.license!r})"
         ]
+        if self._texture_dir is not None:
+            lines.append(f"  _texture_dir: {self._texture_dir.name}")
         if gltf:
-            data = _abbreviate_textures(self.to_gltf())
+            data = _abbreviate_textures(json.loads(self.to_gltf().to_json()))
             self._dump_nested(data, lines, indent=2)
         else:
             for key, prop in self.properties.items():
@@ -1241,7 +1417,11 @@ class Material:
                 if "value" in prop:
                     parts.append(f"value={prop['value']}")
                 if "texture" in prop:
-                    parts.append("texture='data:image/png;base64,...'")
+                    tex = prop["texture"]
+                    if _is_data_uri(tex):
+                        parts.append("texture='data:image/...;base64,...'")
+                    else:
+                        parts.append(f"texture='{tex}'")
                 lines.append(f"  {key}: {', '.join(parts)}")
         return "\n".join(lines)
 
@@ -1266,6 +1446,21 @@ class Material:
 
     def __repr__(self) -> str:
         return self.dump()
+
+    # -----------------------------------------------------------------------
+    # Utilities
+    # -----------------------------------------------------------------------
+
+    @classmethod
+    def list_sources(cls) -> None:
+        """Print available material sources with clickable URLs."""
+        loaders = [cls.ambientcg, cls.gpuopen, cls.polyhaven, cls.physicallybased]
+        width = max(len(l._source) for l in loaders)
+        print("Material sources:")
+        for loader in loaders:
+            label = f"Material.{loader._source}"
+            url = loader._module.BROWSE_URL
+            print(f"  {label:<{width + 10}}  {url}")
 
     def interpolate_color(self) -> tuple[float, float, float, float]:
         """Estimate a representative sRGB color + alpha for CAD mode display.
@@ -1293,7 +1488,9 @@ class Material:
         if isinstance(color_val, str):
             r, g, b = _parse_color_string(color_val)
         elif "texture" in color_prop:
-            tr, tg, tb = _average_texture_linear(color_prop["texture"])
+            tr, tg, tb = _average_texture_linear(
+                color_prop["texture"], self._texture_dir
+            )
             if isinstance(color_val, list):
                 r, g, b = color_val[0] * tr, color_val[1] * tg, color_val[2] * tb
             else:
@@ -1323,3 +1520,46 @@ class Material:
 
     def __contains__(self, key: str) -> bool:
         return key in self.to_dict()
+
+    # -----------------------------------------------------------------------
+    # Cache management
+    # -----------------------------------------------------------------------
+
+    @classmethod
+    def clear_cache(cls, name: str | None = None, source: str | None = None) -> int:
+        """Delete cached material files.
+
+        Parameters
+        ----------
+        name : str, optional
+            Only clear caches whose filename contains this name (case-insensitive).
+        source : str, optional
+            Only clear caches whose filename starts with this source prefix.
+
+        Returns
+        -------
+        int
+            Number of files deleted.
+        """
+        if not CACHE_DIR.exists():
+            return 0
+        if name is None and source is None:
+            count = sum(1 for f in CACHE_DIR.iterdir() if f.is_file())
+            shutil.rmtree(CACHE_DIR)
+            return count
+        count = 0
+        for f in list(CACHE_DIR.iterdir()):
+            if not f.is_file() or f.suffix != ".json":
+                continue
+            fname = f.name.lower()
+            if source and not fname.startswith(source.lower() + "_"):
+                continue
+            if name and name.lower().replace(" ", "_") not in fname:
+                continue
+            f.unlink()
+            # Also remove companion texture directory
+            tex_dir = f.with_suffix("")
+            if tex_dir.is_dir():
+                shutil.rmtree(tex_dir)
+            count += 1
+        return count
