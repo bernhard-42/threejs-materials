@@ -6,8 +6,8 @@ Uses [pygltflib](https://pypi.org/project/pygltflib/) for standard glTF 2.0 file
 
 Supported input formats:
 
-- **MaterialX** — download [MaterialX](https://materialx.org/) materials on demand from four open sources, bake procedural graphs into flat textures, and cache results locally. See [MaterialX sources](#sources).
 - **glTF exports from [Blender](https://www.blender.org/)** — export a mesh with the desired material to a `.gltf` or `.glb` file and load it with `Material.load_gltf()`. All PBR textures are read automatically via pygltflib.
+- **MaterialX** — download [MaterialX](https://materialx.org/) materials on demand from four open sources, bake procedural graphs into flat textures, and cache results locally. See [MaterialX sources](#sources).
 
 <table>
 <tr>
@@ -22,7 +22,7 @@ Supported input formats:
 
 ## Installation
 
-### MaterialX support
+### glTF support
 
 ```bash
 pip install threejs-materials
@@ -32,14 +32,84 @@ pip install threejs-materials
 
 **Dependencies**
 
-- `materialx >= 1.39.4` — MaterialX SDK with TextureBaker
-- `requests >= 2.31.0` — HTTP downloads
-- `openexr >= 3.3` — EXR to PNG conversion
+- `pillow >= 10.0` — image processing
 - `pygltflib >= 1.16` — glTF 2.0 file I/O (pure Python)
+
+### MaterialX support (optional)
+
+```bash
+pip install threejs-materials[materialx]
+# uv pip install threejs-materials[materialx]
+# uv add --extra materialx threejs-materials
+```
+
+**Additional dependencies**
+
+- `materialx >= 1.39.4` — MaterialX SDK with TextureBaker
+- `openexr >= 3.3` — EXR to PNG conversion
+- `requests >= 2.31.0` — HTTP downloads from material sources
+
+Note: For the latest Python, the installer tries to compile materialx and openexr. This might not be possible under Windows if no compiler is installed.
 
 ## Input Formats
 
-### 1 MaterialX
+### 1 Blender glTF exports
+
+Blender supports two main ways of building materials:
+
+- **Texture materials** use image files, such as photos or painted maps, to define how a surface looks. They are straightforward to export and reuse because they rely on standard image data.
+- **Procedural materials** are generated mathematically inside Blender. They can create detailed, seamless looks and are easy to tweak, but they are more tied to Blender’s internal system.
+
+**glTF/GLB export**
+
+glTF and GLB exports handle texture materials reliably but struggle with complex procedural materials. In Blender’s glTF exporter, procedural features like shader node graphs (Noise, Voronoi, Wave, etc.) are typically not supported; they often export as a flat color or lose detail. To preserve the appearance, bake procedural materials into image textures first, converting them to standard texture materials.
+
+**Baking**
+
+Baking turns a procedural material into image maps. Blender renders the material into texture files like base color, roughness, or normal maps, which then replace the procedural nodes. This ensures compatibility with glTF/GLB and other software unfamiliar with Blender’s procedural system. Use Blender’s built-in baking tools, or simplify the process with add-ons like SimpleBake.
+Workflow
+
+1. Apply the material to a mesh in Blender (.g. to the standard cube).
+2. If procedural, bake it to a texture material.
+3. Go to File → Export → glTF 2.0 (.glb/.gltf).
+4. Select glTF Separate (.gltf + .bin + textures) for separate texture files if needed.
+5. Load in Python:
+
+   ```python
+   from threejs_materials import Material
+   materials = Material.load_gltf("brass_cube.gltf")   # .gltf or .glb
+   brass = materials["Brushed brass"]  # access by material name
+   ```
+
+That gives you a clean, portable material workflow: procedural inside Blender, baked to textures for export. Both .gltf  and  .glb  are supported, and texture file paths are typically resolved automatically during export.
+
+#### Format mapping glTF → internal
+
+| glTF field                                      | Internal property                 | Notes                                                                         |
+| ----------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------- |
+| `pbrMetallicRoughness.baseColorFactor`          | `color` (RGB) + `opacity` (alpha) | Alpha < 1.0 also sets `transparent: true`                                     |
+| `pbrMetallicRoughness.baseColorTexture`         | `color` texture                   |                                                                               |
+| `pbrMetallicRoughness.metallicFactor`           | `metalness`                       | Default 1.0                                                                   |
+| `pbrMetallicRoughness.roughnessFactor`          | `roughness`                       | Default 1.0                                                                   |
+| `pbrMetallicRoughness.metallicRoughnessTexture` | `metalness` + `roughness` texture | Same packed texture assigned to both; Three.js reads G=roughness, B=metalness |
+| `normalTexture`                                 | `normal` texture                  | `.scale` → `normalScale`                                                      |
+| `occlusionTexture`                              | `ao` texture                      |                                                                               |
+| `emissiveFactor`                                | `emissive`                        |                                                                               |
+| `emissiveTexture`                               | `emissive` texture                |                                                                               |
+| `alphaMode: "BLEND"`                            | `transparent: true`               |                                                                               |
+| `alphaMode: "MASK"`                             | `alphaTest` = `alphaCutoff`       |                                                                               |
+| `doubleSided`                                   | `side: 2`                         |                                                                               |
+| `KHR_materials_*` extensions                    | Corresponding internal properties | See [glTF extensions table](#2-gltf)                                          |
+
+#### Limitations
+
+- **Multiple materials supported** — `load_gltf()` and `from_gltf()` return a `dict[str, Material]` keyed by material name. A Blender export with multiple materials is loaded in a single call.
+- **Geometry is ignored** — only the material and its textures are imported. The mesh, nodes, and scene hierarchy are discarded.
+- **No UV transforms** — `KHR_texture_transform` on the Blender side (offset, rotation) is imported as `texture_repeat` for the scale component only. Offset and rotation are not supported.
+- **glTF defaults applied** — when `metallicFactor` or `roughnessFactor` are absent, glTF defaults (1.0) are used. This is correct for texture-driven materials where the scalar is a neutral multiplier.
+- **Fully opaque alpha ignored** — when Blender exports `alphaMode: "BLEND"` but the baseColor texture alpha channel is entirely opaque (255 everywhere), the transparency flag is skipped. This is a common Blender export artifact.
+
+### 2 MaterialX
 
 The following source are available for MAterialX downloads
 
@@ -133,54 +203,6 @@ Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no S
 
 - Caching
   - **No cache invalidation** — cached materials are never automatically refreshed. Delete the cache file manually to force re-conversion.
-
-### 2 Blender glTF exports
-
-#### Workflow
-
-- **Non-procural Blender materials**
-  1. In Blender, apply the desired material to any mesh (e.g. a default cube)
-  2. Export via **File → Export → glTF 2.0 (.glb/.gltf)**
-  3. In the export dialog, set **Format** to `glTF Separate (.gltf + .bin + textures)` so textures are written as files alongside the `.gltf`
-  4. Load in Python:
-
-  ```python
-  from threejs_materials import Material
-
-  mat = Material.load_gltf("brass_cube.gltf")   # .gltf or .glb
-  ```
-
-  pygltflib resolves texture file paths automatically. Both `.gltf` (JSON + separate texture files) and `.glb` (single binary file) are supported.
-
-- **Procedural Blender materials**
-
-  Blender's glTF exporter can only export image textures, not procedural shader node graphs. Materials built with procedural nodes (Noise, Voronoi, Wave, custom node groups, etc.) will be exported as a flat color with no textures. To preserve the procedural appearance, the materials need to be baked (without UDIM tiles) into a new material. The new material is non-procdural and can be exported as described above. Baking can be done with blender tools or via third party commercial tools like SimpleBake (available in Blender marketplace).
-
-#### Format mapping glTF → internal
-
-| glTF field                                      | Internal property                 | Notes                                                                         |
-| ----------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------- |
-| `pbrMetallicRoughness.baseColorFactor`          | `color` (RGB) + `opacity` (alpha) | Alpha < 1.0 also sets `transparent: true`                                     |
-| `pbrMetallicRoughness.baseColorTexture`         | `color` texture                   |                                                                               |
-| `pbrMetallicRoughness.metallicFactor`           | `metalness`                       | Default 1.0                                                                   |
-| `pbrMetallicRoughness.roughnessFactor`          | `roughness`                       | Default 1.0                                                                   |
-| `pbrMetallicRoughness.metallicRoughnessTexture` | `metalness` + `roughness` texture | Same packed texture assigned to both; Three.js reads G=roughness, B=metalness |
-| `normalTexture`                                 | `normal` texture                  | `.scale` → `normalScale`                                                      |
-| `occlusionTexture`                              | `ao` texture                      |                                                                               |
-| `emissiveFactor`                                | `emissive`                        |                                                                               |
-| `emissiveTexture`                               | `emissive` texture                |                                                                               |
-| `alphaMode: "BLEND"`                            | `transparent: true`               |                                                                               |
-| `alphaMode: "MASK"`                             | `alphaTest` = `alphaCutoff`       |                                                                               |
-| `doubleSided`                                   | `side: 2`                         |                                                                               |
-| `KHR_materials_*` extensions                    | Corresponding internal properties | See [glTF extensions table](#2-gltf)                                          |
-
-#### Limitations
-
-- **Single material per import** — `load_gltf()` / `from_gltf()` imports one material at a time (selected by `index`). A Blender export with multiple materials requires one call per material.
-- **Geometry is ignored** — only the material and its textures are imported. The mesh, nodes, and scene hierarchy are discarded.
-- **No UV transforms** — `KHR_texture_transform` on the Blender side (offset, rotation) is imported as `texture_repeat` for the scale component only. Offset and rotation are not supported.
-- **glTF defaults applied** — when `metallicFactor` or `roughnessFactor` are absent, glTF defaults (1.0) are used. This is correct for texture-driven materials where the scalar is a neutral multiplier.
-- **Fully opaque alpha ignored** — when Blender exports `alphaMode: "BLEND"` but the baseColor texture alpha channel is entirely opaque (255 everywhere), the transparency flag is skipped. This is a common Blender export artifact.
 
 ## Output Formats
 
@@ -324,15 +346,15 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 - Load from file
 
   ```python
-  mat = Material.load_gltf("car-paint.gltf")   # .gltf or .glb
+  materials = Material.load_gltf("scene.gltf")   # .gltf or .glb
+  brass = materials["Brushed brass"]              # access by name
   ```
 
 - In-memory GLTF2 object
 
   ```python
-  gltf = mat.to_gltf()                          # pygltflib.GLTF2
-  mat = Material.from_gltf(gltf)                 # back to Material
-  mat = Material.from_gltf(gltf, index=1)        # second material
+  gltf = mat.to_gltf()                            # pygltflib.GLTF2
+  materials = Material.from_gltf(gltf)             # dict[str, Material]
   ```
 
 - Multiple materials with texture deduplication
@@ -378,7 +400,7 @@ The glTF export is **visually lossless** for all properties except displacement.
 ```python
 m = Material.gpuopen.load("Perforated Metal")
 g = m.to_gltf()
-m2 = Material.from_gltf(g)
+m2 = Material.from_gltf(g)["Perforated Metal"]
 ```
 
 Results
@@ -522,24 +544,26 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
   ```
 
-- `Material.load_gltf(gltf_file, index=0) -> Material`
+- `Material.load_gltf(gltf_file) -> dict[str, Material]`
 
-  Load a material from a `.gltf` or `.glb` file on disk. Uses pygltflib to read the file and resolve textures automatically. Ideal for importing Blender glTF exports.
+  Load all materials from a `.gltf` or `.glb` file on disk. Returns a dict keyed by material name. Uses pygltflib to read the file and resolve textures automatically. Ideal for importing Blender glTF exports.
 
   ```python
-  mat = Material.load_gltf("brass_cube.gltf")   # or .glb
+  materials = Material.load_gltf("brass_cube.gltf")   # or .glb
+  brass = materials["Brushed brass"]
   ```
 
-- `Material.from_gltf(gltf, index=0) -> Material`
+- `Material.from_gltf(gltf) -> dict[str, Material]`
 
-  Import a material from a `pygltflib.GLTF2` object. Accepts both file-referenced and data-URI images (file references are converted to data URIs automatically). See [Three.js ↔ glTF conversion](#threejs--gltf-conversion) for round-trip behavior.
+  Import all materials from a `pygltflib.GLTF2` object. Returns a dict keyed by material name. Accepts both file-referenced and data-URI images (file references are converted to data URIs automatically). See [Three.js ↔ glTF conversion](#threejs--gltf-conversion) for round-trip behavior.
 
   ```python
   from pygltflib import GLTF2
 
   gltf = GLTF2().load("scene.gltf")
-  mat = Material.from_gltf(gltf)             # first material
-  mat = Material.from_gltf(gltf, index=1)    # second material
+  materials = Material.from_gltf(gltf)
+  body = materials["Car Paint"]
+  glass = materials["Glass"]
   ```
 
 - `material.to_gltf() -> GLTF2`

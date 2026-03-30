@@ -115,7 +115,7 @@ class TestFromGltf:
             roughness={"value": 0.4},
         )
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["color"]["value"] == pytest.approx([0.8, 0.2, 0.1])
         assert imported.properties["metalness"]["value"] == pytest.approx(0.9)
         assert imported.properties["roughness"]["value"] == pytest.approx(0.4)
@@ -125,7 +125,7 @@ class TestFromGltf:
         tex = _b64_png(200, 100, 50)
         mat = _sample(color={"value": [1, 1, 1], "texture": tex})
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["color"]["texture"] == tex
 
     def test_alpha_blend(self):
@@ -135,31 +135,31 @@ class TestFromGltf:
             transparent={"value": True},
         )
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["transparent"]["value"] is True
 
     def test_alpha_mask(self):
         mat = _sample(alphaTest={"value": 0.3})
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["alphaTest"]["value"] == pytest.approx(0.3)
 
     def test_double_sided(self):
         mat = _sample(side={"value": 2})
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["side"]["value"] == 2
 
     def test_ior(self):
         mat = _sample(ior={"value": 1.45})
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["ior"]["value"] == pytest.approx(1.45)
 
     def test_transmission(self):
         mat = _sample(transmission={"value": 0.8})
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["transmission"]["value"] == pytest.approx(0.8)
 
     def test_clearcoat(self):
@@ -168,7 +168,7 @@ class TestFromGltf:
             clearcoatRoughness={"value": 0.1},
         )
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["clearcoat"]["value"] == pytest.approx(0.8)
         assert imported.properties["clearcoatRoughness"]["value"] == pytest.approx(0.1)
 
@@ -179,7 +179,7 @@ class TestFromGltf:
             sheenRoughness={"value": 0.3},
         )
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["sheenColor"]["value"] == pytest.approx([0.9, 0.8, 0.7])
         assert imported.properties["sheenRoughness"]["value"] == pytest.approx(0.3)
 
@@ -190,7 +190,7 @@ class TestFromGltf:
             iridescenceThicknessRange={"value": [100.0, 400.0]},
         )
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["iridescence"]["value"] == pytest.approx(1.0)
         assert imported.properties["iridescenceIOR"]["value"] == pytest.approx(1.3)
         assert imported.properties["iridescenceThicknessRange"]["value"] == pytest.approx([100.0, 400.0])
@@ -201,14 +201,14 @@ class TestFromGltf:
             specularColor={"value": [1.0, 0.9, 0.8]},
         )
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["specularIntensity"]["value"] == pytest.approx(0.8)
         assert imported.properties["specularColor"]["value"] == pytest.approx([1.0, 0.9, 0.8])
 
     def test_dispersion(self):
         mat = _sample(dispersion={"value": 0.5})
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["dispersion"]["value"] == pytest.approx(0.5)
 
     def test_emissive_strength(self):
@@ -217,14 +217,14 @@ class TestFromGltf:
             emissiveIntensity={"value": 2.0},
         )
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["emissiveIntensity"]["value"] == pytest.approx(2.0)
 
     def test_texture_repeat_restored(self):
         tex = _b64_png()
         mat = _sample(color={"texture": tex}).scale(2, 2)
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.texture_repeat == pytest.approx((0.5, 0.5))
 
     def test_from_collect(self):
@@ -234,14 +234,12 @@ class TestFromGltf:
         mat2 = _sample(name="b", metalness={"value": 0.9})
         g = collect_gltf_textures({"a": mat1, "b": mat2})
 
-        imported_a = Material.from_gltf(g, index=0)
-        assert imported_a.name == "a"
-        assert "color" in imported_a.properties
-        assert imported_a.properties["color"]["texture"] == tex
-
-        imported_b = Material.from_gltf(g, index=1)
-        assert imported_b.name == "b"
-        assert imported_b.properties["metalness"]["value"] == pytest.approx(0.9)
+        imported = Material.from_gltf(g)
+        assert "a" in imported
+        assert "b" in imported
+        assert "color" in imported["a"].properties
+        assert imported["a"].properties["color"]["texture"] == tex
+        assert imported["b"].properties["metalness"]["value"] == pytest.approx(0.9)
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +258,7 @@ class TestRoundTrip:
             clearcoatRoughness={"value": 0.1},
         )
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["color"]["value"] == pytest.approx([0.8, 0.2, 0.1])
         assert imported.properties["metalness"]["value"] == pytest.approx(0.9)
         assert imported.properties["roughness"]["value"] == pytest.approx(0.4)
@@ -274,7 +272,7 @@ class TestRoundTrip:
             metalness={"value": 1.0},
         )
         g = mat.to_gltf()
-        imported = Material.from_gltf(g)
+        imported = next(iter(Material.from_gltf(g).values()))
         assert imported.properties["color"]["texture"] == tex
 
     def test_export_reimport_reexport_stable(self):
@@ -286,7 +284,7 @@ class TestRoundTrip:
             ior={"value": 1.45},
         )
         g1 = mat.to_gltf()
-        imported = Material.from_gltf(g1)
+        imported = next(iter(Material.from_gltf(g1).values()))
         g2 = imported.to_gltf()
         m1 = g1.materials[0]
         m2 = g2.materials[0]
@@ -374,7 +372,7 @@ class TestSaveGltf:
         mat = self._mat_with_texture()
         out = tmp_path / "rt.gltf"
         mat.save_gltf(out)
-        imported = Material.load_gltf(str(out))
+        imported = next(iter(Material.load_gltf(str(out)).values()))
         assert "texture" in imported.properties["color"]
         assert imported.properties["color"]["texture"].startswith("data:")
 
@@ -383,5 +381,5 @@ class TestSaveGltf:
         mat = self._mat_with_texture()
         out = tmp_path / "rt.glb"
         mat.save_gltf(out)
-        imported = Material.load_gltf(str(out))
+        imported = next(iter(Material.load_gltf(str(out)).values()))
         assert "texture" in imported.properties["color"]
