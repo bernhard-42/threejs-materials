@@ -1535,6 +1535,33 @@ class Material:
     # -----------------------------------------------------------------------
 
     @classmethod
+    def list_cache(cls) -> list[tuple[str, str]]:
+        """List cached materials.
+
+        Returns a sorted list of ``(source, name)`` tuples.
+        Use ``Material.{source}.from_cache(name)`` to load.
+
+        Example::
+
+            Material.list_cache()
+            # [('ambientcg', 'Metal 009'), ('gpuopen', 'Car Paint'), ...]
+
+            # Load one:
+            mat = Material.gpuopen.from_cache("Car Paint")
+        """
+        if not CACHE_DIR.exists():
+            return []
+        result = []
+        for f in sorted(CACHE_DIR.iterdir()):
+            if not f.is_file() or f.suffix != ".json":
+                continue
+            data = json.loads(f.read_text())
+            source = data.get("source", "?")
+            name = data.get("name", f.stem)
+            result.append((source, name))
+        return result
+
+    @classmethod
     def clear_cache(cls, name: str | None = None, source: str | None = None) -> int:
         """Delete cached material files.
 
