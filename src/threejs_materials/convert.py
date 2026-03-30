@@ -11,12 +11,7 @@ import threading
 from pathlib import Path
 from sys import platform
 
-import MaterialX as mx
-from MaterialX import PyMaterialXRender as mx_render
-from MaterialX import PyMaterialXRenderGlsl as mx_render_glsl
-
-if platform == "darwin":
-    from MaterialX import PyMaterialXRenderMsl as mx_render_msl
+from threejs_materials.utils import ensure_materialx
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +25,7 @@ _bake_lock = threading.Lock()
 
 def load_document_with_stdlib(mtlx_path: Path):
     """Load a MaterialX document with standard library."""
+    mx = ensure_materialx()
     doc = mx.createDocument()
     stdlib = mx.createDocument()
     search_path = mx.getDefaultDataSearchPath()
@@ -57,14 +53,15 @@ def bake_materials(
     height=1024,
 ):
     """Bake all materials using TextureBaker (GLSL preferred, MSL fallback)."""
+    mx = ensure_materialx()
     tex_dir.mkdir(parents=True, exist_ok=True)
 
-    base_type = mx_render.BaseType.UINT8
+    base_type = mx.PyMaterialXRender.BaseType.UINT8
     try:
-        baker = mx_render_glsl.TextureBaker.create(width, height, base_type)
+        baker = mx.PyMaterialXRenderGlsl.TextureBaker.create(width, height, base_type)
     except Exception:
         if platform == "darwin":
-            baker = mx_render_msl.TextureBaker.create(width, height, base_type)
+            baker = mx.PyMaterialXRenderMsl.TextureBaker.create(width, height, base_type)
         else:
             raise
 
@@ -123,6 +120,7 @@ def parse_value(value_str: str, type_str: str):
 
 def find_upstream_image(inp) -> dict | None:
     """Walk upstream from an input to find an image/tiledimage node."""
+    mx = ensure_materialx()
     connected = inp.getConnectedNode()
     doc = inp.getDocument()
 
@@ -149,6 +147,7 @@ def find_upstream_image(inp) -> dict | None:
 
 
 def _extract_image_info(node) -> dict | None:
+    mx = ensure_materialx()
     if node is None:
         return None
 
@@ -190,6 +189,7 @@ def _extract_image_info(node) -> dict | None:
 
 def extract_materials(doc) -> list[dict]:
     """Extract all materials from a MaterialX document."""
+    mx = ensure_materialx()
     materials = []
     for mat_node in doc.getMaterialNodes():
         mat_info = {
@@ -578,9 +578,11 @@ def _convert_exr_to_png(exr_path: Path) -> Path:
         import Imath
         import OpenEXR
     except ImportError as e:
+        from threejs_materials.utils import _MATERIALX_INSTALL_MSG
+
         raise ImportError(
-            "OpenEXR and Imath are required to convert EXR textures. "
-            "Install with: pip install OpenEXR"
+            "openexr is required to convert EXR textures.\n\n"
+            + _MATERIALX_INSTALL_MSG
         ) from e
 
     exr_file = OpenEXR.InputFile(str(exr_path))
