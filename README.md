@@ -34,6 +34,7 @@ pip install threejs-materials
 
 - `pillow >= 10.0` — image processing
 - `pygltflib >= 1.16` — glTF 2.0 file I/O (pure Python)
+- `requests >= 2.31.0` — HTTP downloads from material sources
 
 ### MaterialX support (optional)
 
@@ -47,7 +48,6 @@ pip install threejs-materials[materialx]
 
 - `materialx >= 1.39.4` — MaterialX SDK with TextureBaker
 - `openexr >= 3.3` — EXR to PNG conversion
-- `requests >= 2.31.0` — HTTP downloads from material sources
 
 Note: For the latest Python, the installer tries to compile materialx and openexr. This might not be possible under Windows if no compiler is installed.
 
@@ -148,7 +148,7 @@ Converted materials are cached in `~/.materialx-cache/` as a small JSON file (pr
 
 Textures are only base64-encoded when `to_dict()` is called (for sending to the Three.js viewer). This keeps the cache lightweight and allows multiple Materials to share the same texture files without duplicating large blobs in memory.
 
-To force re-conversion, clear the cache with `Material.clear_cache(name=...)` or delete the files manually.
+To force re-conversion, clear the cache with `clear_cache(name=...)` or delete the files manually.
 
 #### Shader model coverage
 
@@ -167,7 +167,7 @@ Supported models: `standard_surface`, `gltf_pbr`, `open_pbr_surface`. Other mode
 | Clearcoat normal | Yes                                     | Yes                      | Yes                      |
 | Sheen            | Yes                                     | Yes                      | Yes (fuzz)               |
 | Iridescence      | Yes                                     | Yes                      | Yes                      |
-| Anisotropy       | Yes (scalar — no Three.js strength map) | Yes                      | Yes                      |
+| Anisotropy       | No (see note)                           | Yes                      | No (see note)            |
 | Opacity          | Yes                                     | Yes (alpha/alpha_mode)   | Yes (geometry_opacity)   |
 | Displacement     | Yes (model-independent)                 | Yes                      | Yes                      |
 | Dispersion       | No                                      | Yes                      | Yes                      |
@@ -176,6 +176,8 @@ Supported models: `standard_surface`, `gltf_pbr`, `open_pbr_surface`. Other mode
 | Subsurface       | No                                      | No                       | No                       |
 
 Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no SSS support.
+
+Anisotropy is only mapped for `gltf_pbr`, where `anisotropy_strength` corresponds directly to glTF/Three.js `anisotropyStrength`. For `standard_surface` (`specular_anisotropy`) and `open_pbr_surface` (`specular_roughness_anisotropy`), anisotropy is **not mapped** — these models split roughness into directional axes (α·(1±a)), while glTF boosts one axis from base roughness (mix(α, 1, s²)). The models are structurally incompatible and no scalar remap produces correct results across different roughness values.
 
 #### MaterialX limitations
 
@@ -338,7 +340,9 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 - Save to file
 
   ```python
-  mat = Material.gpuopen.load("Car Paint")
+  from threejs_materials import load_gpuopen
+
+  mat = load_gpuopen("Car Paint")
   mat.save_gltf("car-paint.gltf")   # .gltf + car-paint/ (texture files)
   mat.save_gltf("car-paint.glb")    # single binary file
   ```
@@ -360,12 +364,12 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 - Multiple materials with texture deduplication
 
   ```python
-  from threejs_materials import Material, collect_gltf_textures
+  from threejs_materials import collect_gltf_textures, load_gpuopen, load_physicallybased
 
   materials = {
-      "body": Material.gpuopen.load("Car Paint"),
-      "wood": Material.gpuopen.load("Ivory Walnut Solid Wood"),
-      "glass": Material.physicallybased.load("Glass"),
+      "body": load_gpuopen("Car Paint"),
+      "wood": load_gpuopen("Ivory Walnut Solid Wood"),
+      "glass": load_physicallybased("Glass"),
   }
 
   gltf = collect_gltf_textures(materials)  # pygltflib.GLTF2
@@ -398,7 +402,9 @@ The glTF export is **visually lossless** for all properties except displacement.
 **Round-trip example**
 
 ```python
-m = Material.gpuopen.load("Perforated Metal")
+from threejs_materials import load_gpuopen, Material
+
+m = load_gpuopen("Perforated Metal")
 g = m.to_gltf()
 m2 = Material.from_gltf(g)["Perforated Metal"]
 ```
@@ -451,34 +457,22 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 
 ## Common API
 
-### MaterialX Handling
+### Loading from sources
 
-- `Material.list_sources()`
-
-  Print available sources with clickable URLs.
-
-  ```python
-  from threejs_materials import Material
-
-  Material.list_sources()
-  # Material sources:
-  #   Material.ambientCG        https://ambientcg.com/list?type=material
-  #   Material.GPUOpen          https://matlib.gpuopen.com/main/materials/all
-  #   Material.PolyHaven        https://polyhaven.com/textures
-  #   Material.PhysicallyBased  https://physicallybased.info/
-  ```
-
-- `Material.{source}.load(name, resolution="1K") -> Material`
+- `load_gpuopen(name, resolution="1K") -> Material`
+- `load_ambientcg(name, resolution="1K") -> Material`
+- `load_polyhaven(name, resolution="1K") -> Material`
+- `load_physicallybased(name, resolution="1K") -> Material`
 
   Download, convert, and cache a material.
 
   ```python
-  from threejs_materials import Material
+  from threejs_materials import load_gpuopen, load_ambientcg, load_polyhaven, load_physicallybased
 
-  mat = Material.gpuopen.load("Car Paint", resolution="1K")
-  mat = Material.ambientcg.load("Onyx015", resolution="1K")
-  mat = Material.polyhaven.load("plank_flooring_04", resolution="1K")
-  mat = Material.physicallybased.load("Titanium")
+  mat = load_gpuopen("Car Paint", resolution="1K")
+  mat = load_ambientcg("Onyx015", resolution="1K")
+  mat = load_polyhaven("plank_flooring_04", resolution="1K")
+  mat = load_physicallybased("Titanium")
   ```
 
   The first call downloads and converts the material (takes a few seconds). Subsequent calls return the cached JSON instantly from `~/.materialx-cache/`.
@@ -495,6 +489,21 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   | 8K    | —       | 8K-PNG    | 8k        | n/a             |
 
   PhysicallyBased materials are parametric — no resolution needed (and not accepted).
+
+- `list_sources()`
+
+  Print available sources with clickable URLs.
+
+  ```python
+  from threejs_materials.sources import list_sources
+
+  list_sources()
+  # Material sources:
+  #   load_ambientcg        https://ambientcg.com/list?type=material
+  #   load_gpuopen          https://matlib.gpuopen.com/main/materials/all
+  #   load_polyhaven        https://polyhaven.com/textures
+  #   load_physicallybased  https://physicallybased.info/
+  ```
 
 - `Material.from_mtlx(mtlx_file) -> Material`
 
@@ -515,8 +524,9 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   Return a new `Material` with property overrides. The original material is not modified.
 
   ```python
-  mat = Material.gpuopen.load("Car Paint")
+  from threejs_materials import load_gpuopen
 
+  mat = load_gpuopen("Car Paint")
   red_paint = mat.override(color=(0.8, 0.1, 0.1))
   rough_red = mat.override(color=(0.8, 0.1, 0.1), roughness=0.9)
   ```
@@ -589,28 +599,15 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   Convert multiple materials to a `pygltflib.GLTF2` with shared, deduplicated textures. Returns the same type as `to_gltf()`. See [glTF](#gltf) for details.
 
   ```python
-  from threejs_materials import Material, collect_gltf_textures
+  from threejs_materials import collect_gltf_textures, load_gpuopen, load_physicallybased
 
   gltf = collect_gltf_textures({
-      "body": Material.gpuopen.load("Car Paint"),
-      "glass": Material.physicallybased.load("Glass"),
+      "body": load_gpuopen("Car Paint"),
+      "glass": load_physicallybased("Glass"),
   })
   ```
 
 ### Utilities
-
-- `Material.list_sources()`
-
-  Print available material sources with clickable URLs.
-
-  ```python
-  Material.list_sources()
-  # Material sources:
-  #   Material.ambientcg        https://ambientcg.com/list?type=material
-  #   Material.gpuopen          https://matlib.gpuopen.com/main/materials/all
-  #   Material.polyhaven        https://polyhaven.com/textures
-  #   Material.physicallybased  https://physicallybased.info/
-  ```
 
 - `material.dump(gltf=False, json_format=False) -> str`
 
@@ -628,8 +625,9 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   Estimate a single representative sRGB color from a material — useful for CAD viewers that need a flat color per object while keeping a material dictionary for full PBR rendering.
 
   ```python
-  wood = Material.gpuopen.load("Ivory Walnut Solid Wood")
+  from threejs_materials import load_gpuopen
 
+  wood = load_gpuopen("Ivory Walnut Solid Wood")
   materials = {"wood": wood}      # keep for full PBR rendering
   object.material = "wood"
   object.color = wood.interpolate_color()   # (0.53, 0.31, 0.18, 1.0)
@@ -646,6 +644,32 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 
   data_uri = encode_texture_base64("path/to/textures/normal.png")
   # -> 'data:image/png;base64,iVBORw0KGgo...'
+  ```
+
+### Cache management
+
+- `list_cache() -> list[tuple[str, str]]`
+
+  List cached materials as `(source, name)` tuples.
+
+  ```python
+  from threejs_materials import list_cache
+
+  list_cache()
+  # [('ambientcg', 'Metal 009'), ('gpuopen', 'Car Paint'), ...]
+  ```
+
+- `clear_cache(name=None, source=None) -> int`
+
+  Delete cached material files. Returns number of files deleted.
+
+  ```python
+  from threejs_materials import clear_cache
+
+  clear_cache()                          # delete all
+  clear_cache(source="gpuopen")          # delete all GPUOpen caches
+  clear_cache(name="Car Paint")          # delete by name
+  clear_cache(name="brick", source="ambientcg")  # combined filter
   ```
 
 ## Three.js usage
@@ -711,7 +735,7 @@ Alternatively, when injecting materials into an existing glTF file (e.g. from bu
 ```python
 import json
 from build123d import export_gltf
-from threejs_materials import Material, collect_gltf_textures
+from threejs_materials import collect_gltf_textures, load_gpuopen, load_physicallybased
 
 # 1. Build your CAD model
 # ...
@@ -721,9 +745,9 @@ export_gltf(my_shape, "model.gltf")
 
 # 3. Load PBR materials
 materials = {
-    "body":  Material.gpuopen.load("Car Paint").override(color=(0.8, 0.1, 0.1)),
-    "wood":  Material.gpuopen.load("Ivory Walnut Solid Wood").scale(2, 2),
-    "glass": Material.physicallybased.load("Glass"),
+    "body":  load_gpuopen("Car Paint").override(color=(0.8, 0.1, 0.1)),
+    "wood":  load_gpuopen("Ivory Walnut Solid Wood").scale(2, 2),
+    "glass": load_physicallybased("Glass"),
 }
 
 # 4. Convert to glTF arrays (shared, deduplicated textures)
