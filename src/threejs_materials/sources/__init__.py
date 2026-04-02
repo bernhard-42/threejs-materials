@@ -177,6 +177,13 @@ _ALL_LOADERS = [
     physicallybased_loader,
 ]
 
+_SOURCE_LOADERS = {
+    "ambientcg": ambientcg_loader,
+    "gpuopen": gpuopen_loader,
+    "polyhaven": polyhaven_loader,
+    "physicallybased": physicallybased_loader,
+}
+
 
 def _load_gpuopen(name: str, resolution: str = "1K") -> dict:
     return gpuopen_loader.load(name, resolution)
@@ -204,27 +211,56 @@ def list_sources() -> None:
         print(f"  {label:<{width + 6}}  {url}")
 
 
-def list_cache() -> list[tuple[str, str]]:
+def list_cache(as_json: bool = False) -> list[tuple[str, str]] | None:
     """List cached materials.
 
-    Returns a sorted list of ``(source, name)`` tuples.
+    When *as_json* is ``True``, returns a sorted list of
+    ``(source, name)`` tuples.  When ``False`` (default), prints a
+    grouped summary and returns ``None``.
 
     Example::
 
         list_cache()
-        # [('ambientcg', 'Metal 009'), ('gpuopen', 'Car Paint'), ...]
+        # GPUOpen
+        # - Aluminum Brushed
+        # - Steel Brushed
+        # ambientCG
+        # - Metal 009
+
+        list_cache(as_json=True)
+        # [('gpuopen', 'Aluminum Brushed'), ('ambientcg', 'Metal 009'), ...]
     """
     if not CACHE_DIR.exists():
-        return []
-    result = []
+        if as_json:
+            return []
+        print("Cache is empty.")
+        return None
+
+    entries = []
     for f in sorted(CACHE_DIR.iterdir()):
         if not f.is_file() or f.suffix != ".json":
             continue
         data = json.loads(f.read_text())
         source = data.get("source", "?")
         name = data.get("name", f.stem)
-        result.append((source, name))
-    return result
+        entries.append((source, name))
+
+    if as_json:
+        return entries
+
+    if not entries:
+        print("Cache is empty.")
+        return None
+
+    # Group by source and print
+    grouped: dict[str, list[str]] = {}
+    for source, name in entries:
+        grouped.setdefault(source, []).append(name)
+    for source, names in sorted(grouped.items()):
+        print(source)
+        for name in sorted(names):
+            print(f"  - {name}")
+    return None
 
 
 def clear_cache(name: str | None = None, source: str | None = None) -> int:

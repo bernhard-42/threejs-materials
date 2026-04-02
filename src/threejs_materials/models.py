@@ -165,37 +165,3 @@ class PbrMaps:
         return cls(**kwargs)
 
 
-# ---------------------------------------------------------------------------
-# PbrProperties
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class PbrProperties:
-    """A PBR material with metadata, scalar values, and texture maps."""
-
-    id: str
-    name: str
-    source: str
-    url: str
-    license: str
-    values: PbrValues = field(default_factory=PbrValues)
-    maps: PbrMaps = field(default_factory=PbrMaps)
-    texture_repeat: tuple | None = None
-    maps_dir: Path | None = field(default=None, repr=False)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> PbrProperties:
-        """Build from a raw data dict (as stored in cache JSON or returned by loaders)."""
-        td = data.get("maps_dir")
-        return cls(
-            id=data["id"],
-            name=data["name"],
-            source=data["source"],
-            url=data["url"],
-            license=data["license"],
-            values=PbrValues.from_dict(data.get("values", {})),
-            maps=PbrMaps.from_dict(data.get("textures", {})),
-            texture_repeat=data.get("texture_repeat"),
-            maps_dir=Path(td) if td is not None else None,
-        )

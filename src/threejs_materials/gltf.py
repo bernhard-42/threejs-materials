@@ -623,7 +623,7 @@ def inject_materials(
         if isinstance(value, GLTF2):
             obj_id = id(value)
             if obj_id not in _gltf_cache:
-                from threejs_materials.models import PbrProperties
+                from threejs_materials.library import PbrProperties
                 _gltf_cache[obj_id] = PbrProperties.from_dict(_from_gltf(value, index=0))
             normalized[mat_idx] = _gltf_cache[obj_id]
         else:
