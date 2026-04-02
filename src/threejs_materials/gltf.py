@@ -630,12 +630,15 @@ def inject_materials(
             normalized[mat_idx] = value
 
     # Build merged GLTF2 with deduplicated textures via collect_gltf_textures.
+    # Use unique keys — materials with the same name but different content
+    # (e.g. color overrides) must not be collapsed.
     tm_materials: dict[str, Material] = {}
     idx_to_name: dict[int, str] = {}
     for mat_idx, material in normalized.items():
         name = material.name or f"mat_{mat_idx}"
-        if name not in tm_materials:
-            tm_materials[name] = material
+        if name in tm_materials:
+            name = f"{name}_{mat_idx}"
+        tm_materials[name] = material
         idx_to_name[mat_idx] = name
 
     merged = collect_gltf_textures(tm_materials, binary=is_binary)
@@ -714,6 +717,11 @@ def inject_materials(
             for val in ext_data.values():
                 if isinstance(val, dict) and "index" in val:
                     val["index"] += texture_offset
+
+    # Ensure target materials array is large enough for all requested indices
+    max_idx = max(idx_to_name.keys(), default=-1)
+    while len(gltf.materials) <= max_idx:
+        gltf.materials.append(GltfMaterial())
 
     for mat_idx, name in idx_to_name.items():
         merged_idx = merged_name_to_idx.get(name)
