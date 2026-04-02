@@ -477,10 +477,12 @@ class _GltfBuilder:
                 "emissiveStrength": emissive_intensity,
             }
 
-        # Dispersion
+        # Dispersion (requires KHR_materials_volume per glTF spec)
         dispersion = val("dispersion")
         if dispersion is not None and dispersion > 0:
             extensions["KHR_materials_dispersion"] = {"dispersion": dispersion}
+            if "KHR_materials_volume" not in extensions:
+                extensions["KHR_materials_volume"] = {"thicknessFactor": 0}
 
         return extensions
 

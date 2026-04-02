@@ -90,19 +90,16 @@ def _to_threejs_properties(mat: dict) -> dict:
     transmission = mat.get("transmission")
     subsurface_radius = mat.get("subsurfaceRadius")
 
-    # color — skip when transmission or subsurface is active
-    # (transmissive materials use attenuationColor instead;
-    #  Three.js has no SSS so subsurface color has no target)
-    if not transmission and not subsurface_radius:
+    # color — always set (glTF needs baseColorFactor; transmissive materials
+    # use attenuationColor for tint but still need a base color)
+    if not subsurface_radius:
         val("color", color)
 
-    # metalness — skip default 0
-    if metalness > 0:
-        val("metalness", float(metalness))
+    # metalness — always set (glTF defaults to 1.0 which is wrong for dielectrics)
+    val("metalness", float(metalness))
 
-    # roughness — skip default 0.3
-    if roughness != 0.3:
-        val("roughness", float(roughness))
+    # roughness
+    val("roughness", float(roughness))
 
     # specularColor (F82 format) + specularIntensity
     spec_color = _extract_f82_specular_color(mat)
