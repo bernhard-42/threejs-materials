@@ -106,10 +106,10 @@ class _SourceLoader:
         cache_file = _cache_path(self._source, name, res_key)
         if cache_file.exists():
             data = json.loads(cache_file.read_text())
-            # Resolve relative _texture_dir against JSON location
-            td = data.get("_texture_dir")
+            # Resolve relative maps_dir against JSON location
+            td = data.get("maps_dir")
             if td is not None:
-                data["_texture_dir"] = str((cache_file.parent / td).resolve())
+                data["maps_dir"] = str((cache_file.parent / td).resolve())
             print(f"{label}: loading from cache — License: {data.get('license', '')}")
             return data
 
@@ -131,24 +131,34 @@ class _SourceLoader:
             cache_tex_dir = cache_file.with_suffix("")  # strip .json
             _collect_textures(properties, tex_dir, cache_tex_dir)
 
+        # Split combined properties dict into flat values/textures dicts
+        values, textures = {}, {}
+        for k, prop in properties.items():
+            if isinstance(prop, dict):
+                if "value" in prop:
+                    values[k] = prop["value"]
+                if "texture" in prop:
+                    textures[k] = prop["texture"]
+
         output = {
             "id": name,
             "name": name,
             "source": self._source,
             "url": result.url,
             "license": result.license,
-            "properties": properties,
+            "values": values,
+            "textures": textures,
         }
-        # Store relative path in JSON, absolute in runtime Material
+        # Store relative path in JSON, absolute in runtime
         if cache_tex_dir.exists():
-            output["_texture_dir"] = cache_tex_dir.name  # relative for JSON
+            output["maps_dir"] = cache_tex_dir.name  # relative for JSON
 
         cache_file.write_text(json.dumps(output, indent=2))
         print(f"saving ... done — License: {result.license}")
 
-        # Use absolute path for the runtime object
+        # Use absolute path for runtime
         if cache_tex_dir.exists():
-            output["_texture_dir"] = str(cache_tex_dir)
+            output["maps_dir"] = str(cache_tex_dir)
         return output
 
     def __repr__(self):
@@ -233,10 +243,12 @@ def clear_cache(name: str | None = None, source: str | None = None) -> int:
         Number of files deleted.
     """
     if not CACHE_DIR.exists():
+        print("Cache is empty.")
         return 0
     if name is None and source is None:
         count = sum(1 for f in CACHE_DIR.iterdir() if f.is_file())
         shutil.rmtree(CACHE_DIR)
+        print(f"Cleared {count} cached material(s).")
         return count
     count = 0
     for f in list(CACHE_DIR.iterdir()):
@@ -248,9 +260,13 @@ def clear_cache(name: str | None = None, source: str | None = None) -> int:
         if name and name.lower().replace(" ", "_") not in fname:
             continue
         f.unlink()
-        # Also remove companion texture directory
-        tex_dir = f.with_suffix("")
-        if tex_dir.is_dir():
-            shutil.rmtree(tex_dir)
+        # Also remove companion maps directory
+        maps_dir = f.with_suffix("")
+        if maps_dir.is_dir():
+            shutil.rmtree(maps_dir)
         count += 1
+    if count:
+        print(f"Cleared {count} cached material(s).")
+    else:
+        print("No matching cached materials found.")
     return count

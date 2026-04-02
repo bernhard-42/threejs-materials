@@ -1,6 +1,5 @@
-"""Public API: load materials on demand with local JSON caching."""
+"""Public API: PbrProperties and Material alias."""
 
-import base64
 import copy
 import json
 import logging
@@ -19,6 +18,7 @@ from threejs_materials.gltf import (
     to_gltf as _to_gltf,
     save_gltf as _save_gltf,
 )
+from threejs_materials.models import PbrMaps, PbrProperties, PbrValues
 from threejs_materials.utils import (
     ensure_materialx,
     _abbreviate_textures,
@@ -32,622 +32,504 @@ from threejs_materials.utils import (
 log = logging.getLogger(__name__)
 
 
-class Material:
-    """A loaded PBR material with Three.js MeshPhysicalMaterial properties."""
+# -----------------------------------------------------------------------
+# Factory functions (classmethods delegated here for clarity)
+# -----------------------------------------------------------------------
 
-    __slots__ = (
-        "id",
-        "name",
-        "source",
-        "url",
-        "license",
-        "properties",
-        "texture_repeat",
-        "_texture_dir",
+
+def from_gltf(
+    gltf: GLTF2,
+    index: int | None = None,
+) -> dict[str, PbrProperties] | PbrProperties:
+    """Import materials from a ``pygltflib.GLTF2`` object.
+
+    When *index* is ``None`` (default), returns a dict mapping
+    material names to PbrProperties objects.  When *index* is given,
+    returns a single PbrProperties directly.
+    """
+    result = _from_gltf(gltf, index=index)
+    if isinstance(result, dict) and not any(k in result for k in ("id", "name")):
+        return {name: PbrProperties.from_dict(data) for name, data in result.items()}
+    return PbrProperties.from_dict(result)
+
+
+def load_gltf(
+    gltf_file: str, index: int | None = None
+) -> dict[str, PbrProperties] | PbrProperties:
+    """Import materials from a ``.gltf`` or ``.glb`` file on disk."""
+    gltf_path = Path(gltf_file).resolve()
+    if not gltf_path.exists():
+        raise FileNotFoundError(f"File not found: {gltf_path}")
+    return from_gltf(GLTF2.load(str(gltf_path)), index=index)
+
+
+def from_mtlx(mtlx_file: str) -> PbrProperties:
+    """Convert a local .mtlx file to PbrProperties."""
+    ensure_materialx()
+    mtlx_path = Path(mtlx_file).resolve()
+    if not mtlx_path.exists():
+        raise FileNotFoundError(f"File not found: {mtlx_path}")
+
+    doc, _ = load_document_with_stdlib(mtlx_path)
+    orig_mats = extract_materials(doc)
+    if orig_mats:
+        base_dir = mtlx_path.parent
+        missing = [
+            tex_info["file"]
+            for mat in orig_mats
+            for tex_info in mat["textures"].values()
+            if tex_info.get("file") and not (base_dir / tex_info["file"]).exists()
+        ]
+        if missing:
+            raise FileNotFoundError(
+                f"Textures not found (relative to {base_dir}): {', '.join(missing)}"
+            )
+
+    baked_mtlx = mtlx_path.parent / "material.baked.mtlx"
+    try:
+        properties, _, tex_dir = _process_mtlx(mtlx_path)
+    finally:
+        baked_mtlx.unlink(missing_ok=True)
+
+    name = mtlx_path.stem
+    return PbrProperties.from_dict({
+        "id": name,
+        "name": name,
+        "source": "local",
+        "url": "",
+        "license": "",
+        "properties": properties,
+        "maps_dir": str(tex_dir),
+    })
+
+
+def create(
+    id: str,
+    *,
+    color=(0.8, 0.8, 0.8),
+    metalness: float = 0.0,
+    roughness: float = 0.5,
+    ior: float = 1.5,
+    transmission: float = 0.0,
+    opacity: float = 1.0,
+    transparent: bool = False,
+    alpha_test: float | None = None,
+    emissive: tuple | list | None = None,
+    emissive_intensity: float | None = None,
+    clearcoat: float = 0.0,
+    clearcoat_roughness: float = 0.0,
+    sheen: float = 0.0,
+    sheen_color: tuple | list | None = None,
+    sheen_roughness: float = 0.0,
+    anisotropy: float = 0.0,
+    anisotropy_rotation: float = 0.0,
+    specular_intensity: float = 1.0,
+    specular_color: tuple | list | None = None,
+    attenuation_color: tuple | list | None = None,
+    attenuation_distance: float | None = None,
+    thickness: float = 0.0,
+    iridescence: float = 0.0,
+    iridescence_ior: float = 1.3,
+    iridescence_thickness_range: tuple | list | None = None,
+    dispersion: float = 0.0,
+    normal_scale: tuple | list | None = None,
+    displacement_scale: float | None = None,
+    side: int | None = None,
+    # --- Texture maps ---
+    color_map: str | None = None,
+    metalness_map: str | None = None,
+    roughness_map: str | None = None,
+    normal_map: str | None = None,
+    emissive_map: str | None = None,
+    ao_map: str | None = None,
+    opacity_map: str | None = None,
+    clearcoat_map: str | None = None,
+    clearcoat_roughness_map: str | None = None,
+    clearcoat_normal_map: str | None = None,
+    transmission_map: str | None = None,
+    sheen_color_map: str | None = None,
+    sheen_roughness_map: str | None = None,
+    anisotropy_map: str | None = None,
+    iridescence_map: str | None = None,
+    specular_intensity_map: str | None = None,
+    specular_color_map: str | None = None,
+    thickness_map: str | None = None,
+    displacement_map: str | None = None,
+) -> PbrProperties:
+    """Create PbrProperties from explicit PBR values and texture paths.
+
+    Scalar parameters use Three.js ``MeshPhysicalMaterial`` defaults.
+    Texture parameters accept a ``data:`` URI or a local file path.
+
+    Example::
+
+        mat = create(
+            "walnut",
+            color=(0.4, 0.2, 0.1),
+            roughness=0.8,
+            normal_map="bakes/Cube_Normal.png",
+            color_map="bakes/Cube_Diffuse.png",
+            roughness_map="bakes/Cube_Roughness.png",
+        )
+    """
+    texture_dirs: list[Path] = []
+
+    def _resolve_texture(tex: str | None) -> str | None:
+        if tex is None:
+            return None
+        if tex.startswith("data:"):
+            return tex
+        p = Path(tex).resolve()
+        if p.exists():
+            texture_dirs.append(p.parent)
+            return p.name
+        raise FileNotFoundError(f"Texture file not found: {tex}")
+
+    # --- Build values ---
+    if isinstance(color, str):
+        color_val = list(_parse_color_string(color))
+    else:
+        color_val = list(color)[:3]
+
+    values = PbrValues(
+        color=color_val,
+        metalness=metalness,
+        roughness=roughness,
+        ior=ior,
+    )
+    if transmission > 0:
+        values.transmission = transmission
+    if opacity < 1.0:
+        values.opacity = opacity
+    if transparent:
+        values.transparent = True
+    if alpha_test is not None:
+        values.alpha_test = alpha_test
+    if emissive is not None:
+        values.emissive = list(emissive[:3])
+    if emissive_intensity is not None:
+        values.emissive_intensity = emissive_intensity
+    if clearcoat > 0:
+        values.clearcoat = clearcoat
+        values.clearcoat_roughness = clearcoat_roughness
+    if sheen > 0:
+        values.sheen = sheen
+        if sheen_color is not None:
+            values.sheen_color = list(sheen_color[:3])
+        values.sheen_roughness = sheen_roughness
+    if anisotropy > 0:
+        values.anisotropy = anisotropy
+        values.anisotropy_rotation = anisotropy_rotation
+    if specular_intensity != 1.0:
+        values.specular_intensity = specular_intensity
+    if specular_color is not None:
+        values.specular_color = list(specular_color[:3])
+    if attenuation_color is not None:
+        values.attenuation_color = list(attenuation_color[:3])
+    if attenuation_distance is not None:
+        values.attenuation_distance = attenuation_distance
+    if thickness > 0:
+        values.thickness = thickness
+    if iridescence > 0:
+        values.iridescence = iridescence
+        values.iridescence_ior = iridescence_ior
+        if iridescence_thickness_range is not None:
+            values.iridescence_thickness_range = list(iridescence_thickness_range)
+    if dispersion > 0:
+        values.dispersion = dispersion
+    if normal_scale is not None:
+        values.normal_scale = list(normal_scale)
+    if displacement_scale is not None:
+        values.displacement_scale = displacement_scale
+    if side is not None:
+        values.side = side
+
+    # --- Resolve textures ---
+    tex_inputs = {
+        "color": color_map,
+        "metalness": metalness_map,
+        "roughness": roughness_map,
+        "normal": normal_map,
+        "emissive": emissive_map,
+        "ao": ao_map,
+        "opacity": opacity_map,
+        "clearcoat": clearcoat_map,
+        "clearcoat_roughness": clearcoat_roughness_map,
+        "clearcoat_normal": clearcoat_normal_map,
+        "transmission": transmission_map,
+        "sheen_color": sheen_color_map,
+        "sheen_roughness": sheen_roughness_map,
+        "anisotropy": anisotropy_map,
+        "iridescence": iridescence_map,
+        "specular_intensity": specular_intensity_map,
+        "specular_color": specular_color_map,
+        "thickness": thickness_map,
+        "displacement": displacement_map,
+    }
+    maps = PbrMaps()
+    for field_name, tex_path in tex_inputs.items():
+        uri = _resolve_texture(tex_path)
+        if uri:
+            setattr(maps, field_name, uri)
+            # Set neutral scalar when texture is present
+            if field_name == "color":
+                values.color = [1.0, 1.0, 1.0]
+            elif field_name == "metalness":
+                values.metalness = 1.0
+            elif field_name == "roughness":
+                values.roughness = 1.0
+
+    texture_dir = None
+    if texture_dirs:
+        common = texture_dirs[0]
+        if not all(d == common for d in texture_dirs):
+            raise ValueError("All texture files must be in the same directory")
+        texture_dir = common
+
+    return PbrProperties(
+        id=id,
+        name=id,
+        source="custom",
+        url="",
+        license="",
+        values=values,
+        maps=maps,
+        maps_dir=texture_dir,
     )
 
-    def __init__(self, data: dict):
-        self.id: str = data["id"]
-        self.name: str = data["name"]
-        self.source: str = data["source"]
-        self.url: str = data["url"]
-        self.license: str = data["license"]
-        self.properties: dict = data["properties"]
-        self.texture_repeat: tuple | None = data.get("texture_repeat")
-        td = data.get("_texture_dir")
-        self._texture_dir: Path | None = Path(td) if td is not None else None
 
-    # -----------------------------------------------------------------------
-    # Factory methods
-    # -----------------------------------------------------------------------
+# -----------------------------------------------------------------------
+# Methods added to PbrProperties (keep the class in models.py lean)
+# -----------------------------------------------------------------------
 
-    @classmethod
-    def from_gltf(
-        cls,
-        gltf: GLTF2,
-        index: int | None = None,
-    ) -> "dict[str, Material] | Material":
-        """Import materials from a ``pygltflib.GLTF2`` object.
 
-        When *index* is ``None`` (default), returns a dict mapping
-        material names to Material objects.  When *index* is given,
-        returns a single Material directly.
-
-        Parameters
-        ----------
-        gltf : pygltflib.GLTF2
-            A glTF 2.0 document loaded from disk or built
-            programmatically.
-        index : int, optional
-            If given, return only the material at this index.
-        """
-        result = _from_gltf(gltf, index=index)
-        if isinstance(result, dict) and not any(k in result for k in ("id", "name")):
-            # dict of {name: data_dict} — wrap each in Material
-            return {name: cls(data) for name, data in result.items()}
-        return cls(result)
-
-    @classmethod
-    def load_gltf(
-        cls, gltf_file: str, index: int | None = None
-    ) -> "dict[str, Material] | Material":
-        """Import materials from a ``.gltf`` or ``.glb`` file on disk.
-
-        When *index* is ``None`` (default), returns a dict mapping
-        material names to Material objects.  When *index* is given,
-        returns a single Material directly.
-
-        Parameters
-        ----------
-        gltf_file : str
-            Path to a ``.gltf`` or ``.glb`` file.
-        index : int, optional
-            If given, return only the material at this index.
-        """
-        gltf_path = Path(gltf_file).resolve()
-        if not gltf_path.exists():
-            raise FileNotFoundError(f"File not found: {gltf_path}")
-        return cls.from_gltf(GLTF2.load(str(gltf_path)), index=index)
-
-    @classmethod
-    def from_mtlx(cls, mtlx_file: str) -> "Material":
-        """Convert a local .mtlx file to a Material.
-
-        Texture paths in the .mtlx are resolved relative to the file's location.
-        If the material references textures that don't exist on disk, a
-        ``FileNotFoundError`` is raised.
-        """
-        ensure_materialx()
-        mtlx_path = Path(mtlx_file).resolve()
-        if not mtlx_path.exists():
-            raise FileNotFoundError(f"File not found: {mtlx_path}")
-
-        # Validate that referenced texture files exist
-        doc, _ = load_document_with_stdlib(mtlx_path)
-        orig_mats = extract_materials(doc)
-        if orig_mats:
-            base_dir = mtlx_path.parent
-            missing = [
-                tex_info["file"]
-                for mat in orig_mats
-                for tex_info in mat["textures"].values()
-                if tex_info.get("file") and not (base_dir / tex_info["file"]).exists()
-            ]
-            if missing:
-                raise FileNotFoundError(
-                    f"Textures not found (relative to {base_dir}): {', '.join(missing)}"
-                )
-
-        baked_mtlx = mtlx_path.parent / "material.baked.mtlx"
-        try:
-            properties, _, tex_dir = _process_mtlx(mtlx_path)
-        finally:
-            baked_mtlx.unlink(missing_ok=True)
-
-        name = mtlx_path.stem
-        return cls({
-            "id": name,
-            "name": name,
-            "source": "local",
-            "url": "",
-            "license": "",
-            "properties": properties,
-            "_texture_dir": str(tex_dir),
-        })
-
-    @classmethod
-    def create(
-        cls,
-        id: str,
-        *,
-        # --- Scalar values (reasonable defaults) ---
-        color=(0.8, 0.8, 0.8),
-        metalness: float = 0.0,
-        roughness: float = 0.5,
-        ior: float = 1.5,
-        transmission: float = 0.0,
-        opacity: float = 1.0,
-        transparent: bool = False,
-        alphaTest: float | None = None,
-        emissive: tuple | list | None = None,
-        emissiveIntensity: float | None = None,
-        clearcoat: float = 0.0,
-        clearcoatRoughness: float = 0.0,
-        sheen: float = 0.0,
-        sheenColor: tuple | list | None = None,
-        sheenRoughness: float = 0.0,
-        anisotropy: float = 0.0,
-        anisotropyRotation: float = 0.0,
-        specularIntensity: float = 1.0,
-        specularColor: tuple | list | None = None,
-        attenuationColor: tuple | list | None = None,
-        attenuationDistance: float | None = None,
-        thickness: float = 0.0,
-        iridescence: float = 0.0,
-        iridescenceIOR: float = 1.3,
-        iridescenceThicknessRange: tuple | list | None = None,
-        dispersion: float = 0.0,
-        normalScale: tuple | list | None = None,
-        displacementScale: float | None = None,
-        side: int | None = None,
-        # --- Texture maps (data URI or file path, None = no texture) ---
-        color_map: str | None = None,
-        metalness_map: str | None = None,
-        roughness_map: str | None = None,
-        normal_map: str | None = None,
-        emissive_map: str | None = None,
-        ao_map: str | None = None,
-        opacity_map: str | None = None,
-        clearcoat_map: str | None = None,
-        clearcoatRoughness_map: str | None = None,
-        clearcoatNormal_map: str | None = None,
-        transmission_map: str | None = None,
-        sheenColor_map: str | None = None,
-        sheenRoughness_map: str | None = None,
-        anisotropy_map: str | None = None,
-        iridescence_map: str | None = None,
-        specularIntensity_map: str | None = None,
-        specularColor_map: str | None = None,
-        thickness_map: str | None = None,
-        displacement_map: str | None = None,
-    ) -> "Material":
-        """Create a Material from explicit PBR values and texture paths.
-
-        Parameters
-        ----------
-        id : str
-            Material identifier (also used as name).
-
-        Scalar parameters use Three.js ``MeshPhysicalMaterial`` defaults.
-        Texture parameters accept a ``data:`` URI or a local file path
-        (which will be read and base64-encoded automatically).
-
-        Example::
-
-            mat = Material.create(
-                "walnut",
-                color=(0.4, 0.2, 0.1),
-                roughness=0.8,
-                normal_map="bakes/Cube_Normal.png",
-                color_map="bakes/Cube_Diffuse.png",
-                roughness_map="bakes/Cube_Roughness.png",
+def _override(
+    self: PbrProperties,
+    *,
+    color=None,
+    roughness=None,
+    metalness=None,
+    ior=None,
+    transmission=None,
+    opacity=None,
+    clearcoat=None,
+    clearcoat_roughness=None,
+    sheen=None,
+    sheen_color=None,
+    sheen_roughness=None,
+    anisotropy=None,
+    anisotropy_rotation=None,
+    specular_intensity=None,
+    emissive=None,
+    emissive_intensity=None,
+    attenuation_color=None,
+    attenuation_distance=None,
+    thickness=None,
+    iridescence=None,
+) -> PbrProperties:
+    """Return a new PbrProperties with value overrides."""
+    overrides = {
+        k: v
+        for k, v in {
+            "color": color,
+            "roughness": roughness,
+            "metalness": metalness,
+            "ior": ior,
+            "transmission": transmission,
+            "opacity": opacity,
+            "clearcoat": clearcoat,
+            "clearcoat_roughness": clearcoat_roughness,
+            "sheen": sheen,
+            "sheen_color": sheen_color,
+            "sheen_roughness": sheen_roughness,
+            "anisotropy": anisotropy,
+            "anisotropy_rotation": anisotropy_rotation,
+            "specular_intensity": specular_intensity,
+            "emissive": emissive,
+            "emissive_intensity": emissive_intensity,
+            "attenuation_color": attenuation_color,
+            "attenuation_distance": attenuation_distance,
+            "thickness": thickness,
+            "iridescence": iridescence,
+        }.items()
+        if v is not None
+    }
+    new_values = copy.deepcopy(self.values)
+    new_maps = copy.deepcopy(self.maps)
+    for key, value in overrides.items():
+        if isinstance(value, tuple):
+            value = list(value)
+        if key == "color" and new_maps.color is not None:
+            new_maps.color = None
+            warnings.warn(
+                "color override: existing color texture removed and "
+                "replaced by solid color value",
+                stacklevel=2,
             )
-        """
-        texture_dirs: list[Path] = []
+        setattr(new_values, key, value)
+    return PbrProperties(
+        id=self.id,
+        name=self.name,
+        source=self.source,
+        url=self.url,
+        license=self.license,
+        values=new_values,
+        maps=new_maps,
+        texture_repeat=self.texture_repeat,
+        maps_dir=self.maps_dir,
+    )
 
-        def _resolve_texture(tex: str | None) -> str | None:
-            if tex is None:
-                return None
-            if tex.startswith("data:"):
-                return tex
-            p = Path(tex).resolve()
-            if p.exists():
-                texture_dirs.append(p.parent)
-                return p.name  # store just the filename
-            raise FileNotFoundError(f"Texture file not found: {tex}")
 
-        props: dict = {}
+def _scale(self: PbrProperties, u: float, v: float) -> PbrProperties:
+    """Return a new PbrProperties with texture scale applied.
 
-        # --- Build properties with values ---
-        if isinstance(color, str):
-            props["color"] = {"value": list(_parse_color_string(color))}
-        else:
-            props["color"] = {"value": list(color)[:3]}
-        props["metalness"] = {"value": metalness}
-        props["roughness"] = {"value": roughness}
-        props["ior"] = {"value": ior}
+    ``scale(2, 2)`` makes the texture appear 2x larger, which
+    corresponds to ``textureRepeat = (0.5, 0.5)`` in Three.js.
+    """
+    return PbrProperties(
+        id=self.id,
+        name=self.name,
+        source=self.source,
+        url=self.url,
+        license=self.license,
+        values=copy.deepcopy(self.values),
+        maps=copy.deepcopy(self.maps),
+        texture_repeat=(1.0 / u, 1.0 / v),
+        maps_dir=self.maps_dir,
+    )
 
-        if transmission > 0:
-            props["transmission"] = {"value": transmission}
-        if opacity < 1.0:
-            props["opacity"] = {"value": opacity}
-        if transparent:
-            props["transparent"] = {"value": True}
-        if alphaTest is not None:
-            props["alphaTest"] = {"value": alphaTest}
-        if emissive is not None:
-            props["emissive"] = {"value": list(emissive[:3])}
-        if emissiveIntensity is not None:
-            props["emissiveIntensity"] = {"value": emissiveIntensity}
-        if clearcoat > 0:
-            props["clearcoat"] = {"value": clearcoat}
-            props["clearcoatRoughness"] = {"value": clearcoatRoughness}
-        if sheen > 0:
-            props["sheen"] = {"value": sheen}
-            if sheenColor is not None:
-                props["sheenColor"] = {"value": list(sheenColor[:3])}
-            props["sheenRoughness"] = {"value": sheenRoughness}
-        if anisotropy > 0:
-            props["anisotropy"] = {"value": anisotropy}
-            props["anisotropyRotation"] = {"value": anisotropyRotation}
-        if specularIntensity != 1.0:
-            props["specularIntensity"] = {"value": specularIntensity}
-        if specularColor is not None:
-            props["specularColor"] = {"value": list(specularColor[:3])}
-        if attenuationColor is not None:
-            props["attenuationColor"] = {"value": list(attenuationColor[:3])}
-        if attenuationDistance is not None:
-            props["attenuationDistance"] = {"value": attenuationDistance}
-        if thickness > 0:
-            props["thickness"] = {"value": thickness}
-        if iridescence > 0:
-            props["iridescence"] = {"value": iridescence}
-            props["iridescenceIOR"] = {"value": iridescenceIOR}
-            if iridescenceThicknessRange is not None:
-                props["iridescenceThicknessRange"] = {
-                    "value": list(iridescenceThicknessRange)
-                }
-        if dispersion > 0:
-            props["dispersion"] = {"value": dispersion}
-        if normalScale is not None:
-            props["normalScale"] = {"value": list(normalScale)}
-        if displacementScale is not None:
-            props["displacementScale"] = {"value": displacementScale}
-        if side is not None:
-            props["side"] = {"value": side}
 
-        # --- Resolve and attach textures ---
-        tex_map = {
-            "color": color_map,
-            "metalness": metalness_map,
-            "roughness": roughness_map,
-            "normal": normal_map,
-            "emissive": emissive_map,
-            "ao": ao_map,
-            "opacity": opacity_map,
-            "clearcoat": clearcoat_map,
-            "clearcoatRoughness": clearcoatRoughness_map,
-            "clearcoatNormal": clearcoatNormal_map,
-            "transmission": transmission_map,
-            "sheenColor": sheenColor_map,
-            "sheenRoughness": sheenRoughness_map,
-            "anisotropy": anisotropy_map,
-            "iridescence": iridescence_map,
-            "specularIntensity": specularIntensity_map,
-            "specularColor": specularColor_map,
-            "thickness": thickness_map,
-            "displacement": displacement_map,
+def _to_dict(self: PbrProperties) -> dict:
+    """Return the material as a plain dict with base64 data-URI textures."""
+    values_d = self.values.to_dict()
+    textures_d = self.maps.to_dict()
+    if self.maps_dir:
+        textures_d = {
+            k: v if _is_data_uri(v) else _resolve_to_data_uri(v, self.maps_dir)
+            for k, v in textures_d.items()
         }
-        for prop_name, tex_path in tex_map.items():
-            uri = _resolve_texture(tex_path)
-            if uri:
-                props.setdefault(prop_name, {})["texture"] = uri
-                # Set neutral scalar when texture is present
-                if prop_name == "color" and "value" in props.get("color", {}):
-                    props["color"]["value"] = [1.0, 1.0, 1.0]
-                elif prop_name in ("metalness", "roughness") and prop_name in props:
-                    props[prop_name]["value"] = 1.0
+    d = {
+        "id": self.id,
+        "name": self.name,
+        "source": self.source,
+        "url": self.url,
+        "license": self.license,
+        "values": values_d,
+        "textures": textures_d,
+    }
+    if self.texture_repeat is not None:
+        d["textureRepeat"] = list(self.texture_repeat)
+    return d
 
-        data = {
-            "id": id,
-            "name": id,
-            "source": "custom",
-            "url": "",
-            "license": "",
-            "properties": props,
-        }
-        if texture_dirs:
-            # All texture files must be in the same directory
-            common = texture_dirs[0]
-            if not all(d == common for d in texture_dirs):
-                raise ValueError("All texture files must be in the same directory")
-            data["_texture_dir"] = str(common)
-        return cls(data)
 
-    # -----------------------------------------------------------------------
-    # Transforms
-    # -----------------------------------------------------------------------
+def _to_json(self: PbrProperties, **kwargs) -> str:
+    """Serialize to JSON string."""
+    kwargs.setdefault("indent", 2)
+    return json.dumps(self.to_dict(), **kwargs)
 
-    def override(
-        self,
-        *,
-        color=None,
-        roughness=None,
-        metalness=None,
-        ior=None,
-        transmission=None,
-        opacity=None,
-        clearcoat=None,
-        clearcoatRoughness=None,
-        sheen=None,
-        sheenColor=None,
-        sheenRoughness=None,
-        anisotropy=None,
-        anisotropyRotation=None,
-        specularIntensity=None,
-        emissionColor=None,
-        emissionIntensity=None,
-        attenuationColor=None,
-        attenuationDistance=None,
-        thickness=None,
-        thinFilmThickness=None,
-    ) -> "Material":
-        """Return a new Material with property overrides.
 
-        Each parameter sets the ``value`` of the corresponding property,
-        creating it if absent.
+def _to_gltf_method(self: PbrProperties) -> GLTF2:
+    """Convert to a ``pygltflib.GLTF2`` document."""
+    return _to_gltf(self)
 
-        For ``color``, if a texture exists it is removed and replaced by
-        the solid color value.  A warning is logged so the caller knows
-        the texture was dropped.
-        """
-        props = {
-            k: v
-            for k, v in {
-                "color": color,
-                "roughness": roughness,
-                "metalness": metalness,
-                "ior": ior,
-                "transmission": transmission,
-                "opacity": opacity,
-                "clearcoat": clearcoat,
-                "clearcoatRoughness": clearcoatRoughness,
-                "sheen": sheen,
-                "sheenColor": sheenColor,
-                "sheenRoughness": sheenRoughness,
-                "anisotropy": anisotropy,
-                "anisotropyRotation": anisotropyRotation,
-                "specularIntensity": specularIntensity,
-                "emissionColor": emissionColor,
-                "emissionIntensity": emissionIntensity,
-                "attenuationColor": attenuationColor,
-                "attenuationDistance": attenuationDistance,
-                "thickness": thickness,
-                "thinFilmThickness": thinFilmThickness,
-            }.items()
-            if v is not None
-        }
-        new_props = copy.deepcopy(self.properties)
-        for key, value in props.items():
-            if isinstance(value, tuple):
-                value = list(value)
-            if key == "color" and "texture" in new_props.get("color", {}):
-                del new_props["color"]["texture"]
-                warnings.warn(
-                    "color override: existing color texture removed and "
-                    "replaced by solid color value",
-                    stacklevel=2,
-                )
-            new_props.setdefault(key, {})["value"] = value
-        data = self._raw_data()
-        data["properties"] = new_props
-        return Material(data)
 
-    def scale(self, u: float, v: float) -> "Material":
-        """Return a new Material with texture scale applied.
+def _save_gltf_method(self: PbrProperties, path: str | Path, *, overwrite: bool = False) -> None:
+    """Save the material as a ``.gltf`` or ``.glb`` file."""
+    _save_gltf(self, path, overwrite=overwrite)
 
-        ``scale(2, 2)`` makes the texture appear 2x larger, which
-        corresponds to ``textureRepeat = (0.5, 0.5)`` in Three.js.
 
-        Parameters
-        ----------
-        u, v : float
-            Scale factors for the U and V axes.
-        """
-        data = self._raw_data()
-        data["texture_repeat"] = (1.0 / u, 1.0 / v)
-        return Material(data)
-
-    def _raw_data(self) -> dict:
-        """Return a raw data dict preserving file-path texture references."""
-        d = {
-            "id": self.id,
-            "name": self.name,
-            "source": self.source,
-            "url": self.url,
-            "license": self.license,
-            "properties": copy.deepcopy(self.properties),
-        }
-        if self.texture_repeat is not None:
-            d["texture_repeat"] = self.texture_repeat
-        if self._texture_dir is not None:
-            d["_texture_dir"] = str(self._texture_dir)
-        return d
-
-    # -----------------------------------------------------------------------
-    # Serialization: Three.js output
-    # -----------------------------------------------------------------------
-
-    def to_dict(self) -> dict:
-        """Return the full material as a plain dict with base64 data-URI textures.
-
-        File-path texture references are resolved to base64 data URIs
-        so the result is self-contained and ready for the viewer.
-        """
-        d = self._raw_data()
-        if self._texture_dir:
-            for prop in d["properties"].values():
-                if isinstance(prop, dict) and "texture" in prop:
-                    tex = prop["texture"]
-                    if not _is_data_uri(tex):
-                        prop["texture"] = _resolve_to_data_uri(tex, self._texture_dir)
-        # Use camelCase key for external consumers
-        tr = d.pop("texture_repeat", None)
-        if tr is not None:
-            d["textureRepeat"] = list(tr)
-        d.pop("_texture_dir", None)
-        return d
-
-    def to_json(self, **kwargs) -> str:
-        """Serialize to JSON string. Keyword args are passed to ``json.dumps``."""
-        kwargs.setdefault("indent", 2)
-        return json.dumps(self.to_dict(), **kwargs)
-
-    # -----------------------------------------------------------------------
-    # Serialization: glTF I/O
-    # -----------------------------------------------------------------------
-
-    def to_gltf(self) -> GLTF2:
-        """Convert to a ``pygltflib.GLTF2`` document.
-
-        Returns a self-contained glTF 2.0 document with materials, images,
-        textures, and samplers.  Properties with no glTF equivalent
-        (``displacement``, ``displacementScale``) are silently dropped.
-        """
-        return _to_gltf(self)
-
-    def save_gltf(self, path: str | Path, *, overwrite: bool = False) -> None:
-        """Save the material as a ``.gltf`` or ``.glb`` file.
-
-        The format is chosen automatically from the file extension.
-        For ``.gltf``, textures are written as separate files in a
-        companion directory (e.g. ``wood.gltf`` + ``wood/color.png``).
-        For ``.glb``, textures are embedded in the binary file.
-
-        Parameters
-        ----------
-        path : str or Path
-            Output file path (``.gltf`` or ``.glb``).
-        overwrite : bool
-            If ``False`` (default), raise ``FileExistsError`` when *path*
-            or its companion texture directory already exist.  If ``True``,
-            overwrite the file and texture files in the directory.
-        """
-        _save_gltf(self, path, overwrite=overwrite)
-
-    # -----------------------------------------------------------------------
-    # Display
-    # -----------------------------------------------------------------------
-
-    def dump(self, gltf: bool = False, json_format: bool = False) -> str:
-        """Return a human-readable summary of the material properties.
-
-        When *gltf* is ``True`` the glTF property structure is shown
-        instead of the Three.js layout.  When *json_format* is ``True``
-        the output is valid JSON with textures abbreviated.
-        """
-        if json_format:
-            if gltf:
-                data = json.loads(self.to_gltf().to_json())
-            else:
-                data = self.to_dict()
-            return json.dumps(_abbreviate_textures(data), indent=2)
-
-        lines = [
-            f"Material(name={self.name!r}, source={self.source!r}, "
-            f"license={self.license!r})"
-        ]
-        if self._texture_dir is not None:
-            lines.append(f"  _texture_dir: {self._texture_dir.name}")
+def _dump(self: PbrProperties, gltf: bool = False, json_format: bool = False) -> str:
+    """Return a human-readable summary of the material properties."""
+    if json_format:
         if gltf:
-            data = _abbreviate_textures(json.loads(self.to_gltf().to_json()))
-            self._dump_nested(data, lines, indent=2)
+            data = json.loads(self.to_gltf().to_json())
         else:
-            for key, prop in self.properties.items():
-                parts = []
-                if "value" in prop:
-                    parts.append(f"value={prop['value']}")
-                if "texture" in prop:
-                    tex = prop["texture"]
-                    if _is_data_uri(tex):
-                        parts.append("texture='data:image/...;base64,...'")
-                    else:
-                        parts.append(f"texture='{tex}'")
-                lines.append(f"  {key}: {', '.join(parts)}")
+            data = self.to_dict()
+        return json.dumps(_abbreviate_textures(data), indent=2)
+
+    if gltf:
+        lines = [repr(self)]
+        data = _abbreviate_textures(json.loads(self.to_gltf().to_json()))
+        _dump_nested(data, lines, indent=2)
         return "\n".join(lines)
 
-    @staticmethod
-    def _dump_nested(obj, lines, indent=2):
-        """Recursively format a nested dict/list for dump output."""
-        prefix = " " * indent
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if isinstance(v, str) and v.startswith("data:"):
-                    lines.append(f"{prefix}{k}: 'data:image/png;base64,...'")
-                elif isinstance(v, dict):
-                    lines.append(f"{prefix}{k}:")
-                    Material._dump_nested(v, lines, indent + 2)
-                elif isinstance(v, list) and v and isinstance(v[0], dict):
-                    lines.append(f"{prefix}{k}:")
-                    for i, item in enumerate(v):
-                        lines.append(f"{prefix}  [{i}]:")
-                        Material._dump_nested(item, lines, indent + 4)
-                else:
-                    lines.append(f"{prefix}{k}: {v}")
+    # Default: delegate to dataclass reprs
+    lines = [
+        f"PbrProperties(name={self.name!r}, source={self.source!r}, "
+        f"license={self.license!r})",
+        f"  values:  {self.values!r}",
+        f"  maps:    {self.maps!r}",
+    ]
+    if self.texture_repeat is not None:
+        lines.append(f"  texture_repeat: {self.texture_repeat}")
+    if self.maps_dir is not None and self.maps.to_dict():
+        lines.append(f"  maps_dir: {self.maps_dir}")
+    return "\n".join(lines)
 
-    def __repr__(self) -> str:
-        return self.dump()
 
-    # -----------------------------------------------------------------------
-    # Utilities
-    # -----------------------------------------------------------------------
-
-    def interpolate_color(self) -> tuple[float, float, float, float]:
-        """Estimate a representative sRGB color + alpha for CAD mode display.
-
-        Returns an ``(r, g, b, a)`` tuple with each component in 0-1 (sRGB).
-        When the material has a color texture, the texture is averaged.
-        When the color is a scalar (linear RGB), it is converted to sRGB.
-
-        Transmission is mapped to partial transparency so glass-like
-        materials look semi-transparent in CAD mode.
-
-        Usage::
-
-            from threejs_materials import load_gpuopen
-            wood = load_gpuopen("Ivory Walnut Solid Wood")
-            obj.material = "wood"
-            obj.color = wood.interpolate_color()  # (0.53, 0.31, 0.18, 1.0)
-        """
-        props = self.properties
-        color_prop = props.get("color", {})
-
-        # --- Color ---
-        # Three.js multiplies color × map texture, so when both exist we
-        # multiply the scalar value by the average texture color.
-        color_val = color_prop.get("value")
-        if isinstance(color_val, str):
-            r, g, b = _parse_color_string(color_val)
-        elif "texture" in color_prop:
-            tr, tg, tb = _average_texture_linear(
-                color_prop["texture"], self._texture_dir
-            )
-            if isinstance(color_val, list):
-                r, g, b = color_val[0] * tr, color_val[1] * tg, color_val[2] * tb
+def _dump_nested(obj, lines, indent=2):
+    """Recursively format a nested dict/list for dump output."""
+    prefix = " " * indent
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, str) and v.startswith("data:"):
+                lines.append(f"{prefix}{k}: 'data:...;base64,...'")
+            elif isinstance(v, dict):
+                lines.append(f"{prefix}{k}:")
+                _dump_nested(v, lines, indent + 2)
+            elif isinstance(v, list) and v and isinstance(v[0], dict):
+                lines.append(f"{prefix}{k}:")
+                for i, item in enumerate(v):
+                    lines.append(f"{prefix}  [{i}]:")
+                    _dump_nested(item, lines, indent + 4)
             else:
-                r, g, b = tr, tg, tb
-        elif isinstance(color_val, list):
-            r, g, b = color_val[:3]
+                lines.append(f"{prefix}{k}: {v}")
+
+
+def _interpolate_color(self: PbrProperties) -> tuple[float, float, float, float]:
+    """Estimate a representative sRGB color + alpha for CAD mode display."""
+    color_val = self.values.color
+    color_tex = self.maps.color
+
+    if isinstance(color_val, str):
+        r, g, b = _parse_color_string(color_val)
+    elif color_tex is not None:
+        tr, tg, tb = _average_texture_linear(color_tex, self.maps_dir)
+        if isinstance(color_val, list):
+            r, g, b = color_val[0] * tr, color_val[1] * tg, color_val[2] * tb
         else:
-            r, g, b = 0.5, 0.5, 0.5
+            r, g, b = tr, tg, tb
+    elif isinstance(color_val, list):
+        r, g, b = color_val[:3]
+    else:
+        r, g, b = 0.5, 0.5, 0.5
 
-        # Linear → sRGB
-        sr, sg, sb = _linear_to_srgb(r), _linear_to_srgb(g), _linear_to_srgb(b)
+    sr, sg, sb = _linear_to_srgb(r), _linear_to_srgb(g), _linear_to_srgb(b)
 
-        # --- Alpha ---
-        alpha = 1.0
-        opacity_val = props.get("opacity", {}).get("value")
-        if isinstance(opacity_val, (int, float)) and opacity_val < 1.0:
-            alpha = float(opacity_val)
-        else:
-            transmission_val = props.get("transmission", {}).get("value")
-            if isinstance(transmission_val, (int, float)) and transmission_val > 0:
-                alpha = max(0.15, 1.0 - transmission_val * 0.7)
+    alpha = 1.0
+    opacity_val = self.values.opacity
+    if isinstance(opacity_val, (int, float)) and opacity_val < 1.0:
+        alpha = float(opacity_val)
+    else:
+        transmission_val = self.values.transmission
+        if isinstance(transmission_val, (int, float)) and transmission_val > 0:
+            alpha = max(0.15, 1.0 - transmission_val * 0.7)
 
-        return (round(sr, 4), round(sg, 4), round(sb, 4), round(alpha, 4))
+    return (round(sr, 4), round(sg, 4), round(sb, 4), round(alpha, 4))
 
-    def __getitem__(self, key: str):
-        return self.to_dict()[key]
 
-    def __contains__(self, key: str) -> bool:
-        return key in self.to_dict()
+# Attach methods to PbrProperties
+PbrProperties.override = _override
+PbrProperties.scale = _scale
+PbrProperties.to_dict = _to_dict
+PbrProperties.to_json = _to_json
+PbrProperties.to_gltf = _to_gltf_method
+PbrProperties.save_gltf = _save_gltf_method
+PbrProperties.dump = _dump
+PbrProperties.interpolate_color = _interpolate_color
+PbrProperties.from_gltf = staticmethod(from_gltf)
+PbrProperties.load_gltf = staticmethod(load_gltf)
+PbrProperties.from_mtlx = staticmethod(from_mtlx)
+PbrProperties.create = staticmethod(create)
+PbrProperties.__repr__ = _dump
+

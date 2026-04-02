@@ -201,18 +201,21 @@ class _GltfBuilder:
         return ref
 
     def add_material(self, material, name: str | None = None) -> None:
-        """Convert a Material and append it to the GLTF2 document."""
-        props = material.properties
-        texture_dir = material._texture_dir
+        """Convert a Material/PbrProperties and append it to the GLTF2 document."""
+        vals = material.values
+        texs = material.maps
+        texture_dir = material.maps_dir
         tex_repeat = material.texture_repeat
 
+        # vals/texs may be dataclasses or plain dicts (legacy)
+        _vals = vals.to_dict() if hasattr(vals, "to_dict") else vals
+        _texs = texs.to_dict() if hasattr(texs, "to_dict") else texs
+
         def val(prop_name: str):
-            return props.get(prop_name, {}).get("value")
+            return _vals.get(prop_name)
 
         def tex_uri(prop_name: str) -> str | None:
-            return self._resolve_tex(
-                props.get(prop_name, {}).get("texture"), texture_dir
-            )
+            return self._resolve_tex(_texs.get(prop_name), texture_dir)
 
         def tex_info(prop_name: str) -> TextureInfo | None:
             uri = tex_uri(prop_name)
@@ -238,7 +241,7 @@ class _GltfBuilder:
             alpha_cutoff = alpha_test
         elif val("transparent") is True:
             alpha_mode = "BLEND"
-        elif props.get("opacity", {}).get("texture"):
+        elif _texs.get("opacity"):
             alpha_mode = "MASK"
             alpha_cutoff = 0.5
 
@@ -620,9 +623,8 @@ def inject_materials(
         if isinstance(value, GLTF2):
             obj_id = id(value)
             if obj_id not in _gltf_cache:
-                # Lazy import to avoid circular dependency at module level
-                from threejs_materials.library import Material as _Material
-                _gltf_cache[obj_id] = _Material(_from_gltf(value, index=0))
+                from threejs_materials.models import PbrProperties
+                _gltf_cache[obj_id] = PbrProperties.from_dict(_from_gltf(value, index=0))
             normalized[mat_idx] = _gltf_cache[obj_id]
         else:
             normalized[mat_idx] = value
@@ -843,15 +845,16 @@ def _from_gltf(
     result: dict[str, dict] = {}
 
     for mat_index, mat in enumerate(gltf.materials):
-        props: dict = {}
+        values: dict = {}
+        textures: dict = {}
 
         def val(name, value):
-            props.setdefault(name, {})["value"] = value
+            values[name] = value
 
         def tex(name, tex_idx):
             uri = _resolve_tex_by_index(tex_idx)
             if uri:
-                props.setdefault(name, {})["texture"] = uri
+                textures[name] = uri
 
         def tex_from_ext(name, ext_tex_ref):
             """Resolve a texture from an extension dict entry like {"index": N}."""
@@ -900,7 +903,7 @@ def _from_gltf(
         # --- Alpha mode ---
         if mat.alphaMode == "BLEND":
             actually_transparent = True
-            color_uri = props.get("color", {}).get("texture")
+            color_uri = textures.get("color")
             if color_uri:
                 actually_transparent = _has_real_alpha(color_uri)
             if actually_transparent:
@@ -1002,7 +1005,8 @@ def _from_gltf(
             "source": "gltf",
             "url": "",
             "license": "",
-            "properties": props,
+            "values": values,
+            "textures": textures,
         }
         if texture_repeat is not None:
             data["texture_repeat"] = texture_repeat
