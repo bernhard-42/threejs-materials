@@ -6,11 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from threejs_materials.library import (
-    CACHE_DIR,
-    Material,
-    _cache_path,
-)
+from threejs_materials.library import Material
+from threejs_materials.sources import CACHE_DIR, _cache_path
 
 
 # ---------------------------------------------------------------------------
@@ -142,10 +139,13 @@ class TestMaterial:
         assert "nonexistent" not in mat
 
     def test_source_loaders_exist(self):
-        assert repr(Material.ambientcg) == "Material.ambientcg"
-        assert repr(Material.gpuopen) == "Material.gpuopen"
-        assert repr(Material.polyhaven) == "Material.polyhaven"
-        assert repr(Material.physicallybased) == "Material.physicallybased"
+        from threejs_materials.sources import (
+            ambientcg_loader, gpuopen_loader, polyhaven_loader, physicallybased_loader,
+        )
+        assert repr(ambientcg_loader) == "_SourceLoader('ambientcg')"
+        assert repr(gpuopen_loader) == "_SourceLoader('gpuopen')"
+        assert repr(polyhaven_loader) == "_SourceLoader('polyhaven')"
+        assert repr(physicallybased_loader) == "_SourceLoader('physicallybased')"
 
 
 # ---------------------------------------------------------------------------
@@ -247,58 +247,63 @@ class TestOverride:
 
 
 # ---------------------------------------------------------------------------
-# Material.clear_cache
+# clear_cache / list_cache (in sources)
 # ---------------------------------------------------------------------------
 
 
 class TestClearCache:
     def test_clear_all(self, tmp_path, monkeypatch):
+        from threejs_materials.sources import clear_cache
         cache = tmp_path / "cache"
         cache.mkdir()
         (cache / "ambientcg_brick_1k.json").write_text("{}")
         (cache / "gpuopen_wood_2k.json").write_text("{}")
-        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", cache)
+        monkeypatch.setattr("threejs_materials.sources.CACHE_DIR", cache)
 
-        count = Material.clear_cache()
+        count = clear_cache()
         assert count == 2
         assert not cache.exists()
 
     def test_clear_by_source(self, tmp_path, monkeypatch):
+        from threejs_materials.sources import clear_cache
         cache = tmp_path / "cache"
         cache.mkdir()
         (cache / "ambientcg_brick_1k.json").write_text("{}")
         (cache / "gpuopen_wood_2k.json").write_text("{}")
-        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", cache)
+        monkeypatch.setattr("threejs_materials.sources.CACHE_DIR", cache)
 
-        count = Material.clear_cache(source="ambientcg")
+        count = clear_cache(source="ambientcg")
         assert count == 1
         assert (cache / "gpuopen_wood_2k.json").exists()
 
     def test_clear_by_name(self, tmp_path, monkeypatch):
+        from threejs_materials.sources import clear_cache
         cache = tmp_path / "cache"
         cache.mkdir()
         (cache / "ambientcg_brick_1k.json").write_text("{}")
         (cache / "ambientcg_wood_1k.json").write_text("{}")
-        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", cache)
+        monkeypatch.setattr("threejs_materials.sources.CACHE_DIR", cache)
 
-        count = Material.clear_cache(name="brick")
+        count = clear_cache(name="brick")
         assert count == 1
         assert (cache / "ambientcg_wood_1k.json").exists()
 
     def test_clear_by_name_and_source(self, tmp_path, monkeypatch):
+        from threejs_materials.sources import clear_cache
         cache = tmp_path / "cache"
         cache.mkdir()
         (cache / "ambientcg_brick_1k.json").write_text("{}")
         (cache / "gpuopen_brick_2k.json").write_text("{}")
-        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", cache)
+        monkeypatch.setattr("threejs_materials.sources.CACHE_DIR", cache)
 
-        count = Material.clear_cache(name="brick", source="ambientcg")
+        count = clear_cache(name="brick", source="ambientcg")
         assert count == 1
         assert (cache / "gpuopen_brick_2k.json").exists()
 
     def test_clear_nonexistent_cache(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("threejs_materials.library.CACHE_DIR", tmp_path / "nope")
-        assert Material.clear_cache() == 0
+        from threejs_materials.sources import clear_cache
+        monkeypatch.setattr("threejs_materials.sources.CACHE_DIR", tmp_path / "nope")
+        assert clear_cache() == 0
 
 
 # ---------------------------------------------------------------------------

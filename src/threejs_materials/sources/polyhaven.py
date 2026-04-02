@@ -5,7 +5,7 @@ from pathlib import Path
 
 import requests
 
-from threejs_materials.sources import SourceResult
+from threejs_materials.sources.common import SourceResult
 
 log = logging.getLogger(__name__)
 

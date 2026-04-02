@@ -5,7 +5,8 @@ import base64
 import pytest
 
 from conftest import _make_1x1_png
-from threejs_materials.library import Material, collect_gltf_textures
+from threejs_materials.library import Material
+from threejs_materials.gltf import collect_gltf_textures
 
 
 def _b64_png(r=128, g=128, b=128):

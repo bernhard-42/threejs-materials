@@ -1,94 +1,40 @@
-from threejs_materials.library import Material, collect_gltf_textures
 from threejs_materials.convert import encode_texture_base64
+from threejs_materials.gltf import collect_gltf_textures, inject_materials
+from threejs_materials.library import Material
+from threejs_materials.sources import (
+    _load_ambientcg,
+    _load_gpuopen,
+    _load_physicallybased,
+    _load_polyhaven,
+    clear_cache,
+    list_cache,
+)
 
 __all__ = [
     "Material",
     "encode_texture_base64",
     "collect_gltf_textures",
-    "gpuopen_pbr",
-    "ambientcg_pbr",
-    "polyhaven_pbr",
-    "physicallybased_pbr",
-    "gpuopen_gltf",
-    "ambientcg_gltf",
-    "polyhaven_gltf",
-    "physicallybased_gltf",
+    "inject_materials",
+    "load_ambientcg",
+    "load_gpuopen",
+    "load_physicallybased",
+    "load_polyhaven",
+    "list_cache",
+    "clear_cache",
 ]
 
 
-def _load_pbr(
-    loader,
-    name: str,
-    color: tuple[float, float, float] = None,
-    scale: tuple[float, float] = None,
-) -> Material:
-    material = loader.load(name)
-    if color:
-        material.override(color=color)
-    if scale:
-        material = material.scale(*scale)
-    return material
+def load_gpuopen(name: str, resolution: str = "1K") -> Material:
+    return Material(_load_gpuopen(name, resolution))
 
 
-def gpuopen_pbr(
-    name: str,
-    color: tuple[float, float, float] = None,
-    scale: tuple[float, float] = None,
-) -> Material:
-    return _load_pbr(Material.gpuopen, name, color, scale)
+def load_ambientcg(name: str, resolution: str = "1K") -> Material:
+    return Material(_load_ambientcg(name, resolution))
 
 
-def ambientcg_pbr(
-    name: str,
-    color: tuple[float, float, float] = None,
-    scale: tuple[float, float] = None,
-) -> Material:
-    return _load_pbr(Material.ambientcg, name, color, scale)
+def load_polyhaven(name: str, resolution: str = "1K") -> Material:
+    return Material(_load_polyhaven(name, resolution))
 
 
-def polyhaven_pbr(
-    name: str,
-    color: tuple[float, float, float] = None,
-    scale: tuple[float, float] = None,
-) -> Material:
-    return _load_pbr(Material.polyhaven, name, color, scale)
-
-
-def physicallybased_pbr(
-    name: str,
-    color: tuple[float, float, float] = None,
-    scale: tuple[float, float] = None,
-) -> Material:
-    return _load_pbr(Material.physicallybased, name, color, scale)
-
-
-def gpuopen_gltf(
-    name: str,
-    color: tuple[float, float, float] = None,
-    scale: tuple[float, float] = None,
-) -> Material:
-    return _load_pbr(Material.gpuopen, name, color, scale).to_gltf()
-
-
-def ambientcg_gltf(
-    name: str,
-    color: tuple[float, float, float] = None,
-    scale: tuple[float, float] = None,
-) -> Material:
-    return _load_pbr(Material.ambientcg, name, color, scale).to_gltf()
-
-
-def polyhaven_gltf(
-    name: str,
-    color: tuple[float, float, float] = None,
-    scale: tuple[float, float] = None,
-) -> Material:
-    return _load_pbr(Material.polyhaven, name, color, scale).to_gltf()
-
-
-def physicallybased_gltf(
-    name: str,
-    color: tuple[float, float, float] = None,
-    scale: tuple[float, float] = None,
-) -> Material:
-    return _load_pbr(Material.physicallybased, name, color, scale).to_gltf()
+def load_physicallybased(name: str, resolution: str = "1K") -> Material:
+    return Material(_load_physicallybased(name, resolution))

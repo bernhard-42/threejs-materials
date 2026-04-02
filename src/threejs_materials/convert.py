@@ -2,6 +2,7 @@
 Bake + extract → MeshPhysicalMaterial JSON with base64-encoded textures.
 """
 
+import array
 import base64
 import logging
 import mimetypes
@@ -11,7 +12,9 @@ import threading
 from pathlib import Path
 from sys import platform
 
-from threejs_materials.utils import ensure_materialx
+from PIL import Image
+
+from threejs_materials.utils import ensure_materialx, ensure_openexr
 
 log = logging.getLogger(__name__)
 
@@ -235,6 +238,7 @@ def extract_materials(doc) -> list[dict]:
     return materials
 
 
+
 def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
     """Convert extracted MaterialX material to MeshPhysicalMaterial properties.
 
@@ -271,8 +275,18 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         # applying `base` again would double-darken the result.
         base = p.get("base", 1.0)
         base_color = p.get("base_color", [0.8, 0.8, 0.8])
+        metalness_val = p.get("metalness", 0.0)
         if has_tex("base_color"):
-            val("color", [1.0, 1.0, 1.0])
+            # Three.js multiplies color × map texture.
+            # For metallic materials (metalness≥1), the baked texture IS the
+            # F0 reflectance.  The baker does not include the `base` weight,
+            # but applying it here darkens metals too much — the
+            # standard_surface specular layer compensates in ways that glTF
+            # pbrMetallicRoughness cannot replicate.  Use neutral [1,1,1].
+            if metalness_val >= 1.0 or has_tex("metalness"):
+                val("color", [1.0, 1.0, 1.0])
+            else:
+                val("color", [base, base, base])
         else:
             val("color", [c * base for c in base_color])
         tex("color", "base_color")
@@ -299,10 +313,10 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             # objects in a dedicated pass; setting transparent moves them to the
             # wrong (transparent) pass and breaks physically-correct refraction.
 
-        aniso = p.get("specular_anisotropy", 0.0)
-        if aniso > 0.0:
-            val("anisotropy", aniso)
-            val("anisotropyRotation", p.get("specular_rotation", 0.0) * 2.0 * 3.141592653589793)
+        # standard_surface specular_anisotropy is not mapped.
+        # It splits roughness into directional axes (α·(1±a)), while glTF
+        # boosts one axis from base roughness — the models are structurally
+        # incompatible and no scalar remap produces correct results.
 
         coat = p.get("coat", 0.0)
         if coat > 0.0:
@@ -500,9 +514,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         if abbe and abbe > 0:
             val("dispersion", 20.0 / abbe)
 
-        aniso = p.get("specular_roughness_anisotropy", 0.0)
-        if aniso > 0.0:
-            val("anisotropy", aniso)
+        # open_pbr_surface specular_roughness_anisotropy is not mapped.
+        # Same structural mismatch as standard_surface — see comment above.
 
         coat = p.get("coat_weight", 0.0)
         if coat > 0.0:
@@ -572,18 +585,7 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
 
 def _convert_exr_to_png(exr_path: Path) -> Path:
     """Convert an EXR image to 8-bit PNG. Returns path to the new PNG file."""
-    import array
-
-    try:
-        import Imath
-        import OpenEXR
-    except ImportError as e:
-        from threejs_materials.utils import _MATERIALX_INSTALL_MSG
-
-        raise ImportError(
-            "openexr is required to convert EXR textures.\n\n"
-            + _MATERIALX_INSTALL_MSG
-        ) from e
+    OpenEXR, Imath = ensure_openexr()
 
     exr_file = OpenEXR.InputFile(str(exr_path))
     header = exr_file.header()
@@ -634,7 +636,6 @@ def _convert_exr_to_png(exr_path: Path) -> Path:
                 pixels[i * len(rgb) + ch_idx] = int(clamped * 255 + 0.5)
         mode = "RGB" if len(rgb) == 3 else "RGBA"
 
-    from PIL import Image
     img = Image.frombytes(mode, (width, height), bytes(pixels))
     png_path = exr_path.with_suffix(".png")
     img.save(png_path)
@@ -735,33 +736,40 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None, Path]:
         # Merge textures the baker missed from the original.
         # The baker sometimes collapses a texture to a single sampled
         # scalar (e.g. normal → [0.5, 0.5, 1.0], roughness → 0.3).
-        # The original texture is always preferable over a lossy scalar,
-        # so merge back any original texture that the baker didn't
-        # produce as a baked texture.
+        # Only merge back an original texture if:
+        # 1. The baker didn't produce a baked texture for this input, AND
+        # 2. The baker also didn't produce a scalar value for it
+        #    (a scalar means the baker intentionally resolved the
+        #    procedural graph, e.g. channel extraction from a packed
+        #    texture — merging back the raw packed texture would be wrong)
         if mats and orig_mats and mats is not orig_mats:
             baked_tex = mats[0].get("textures", {})
             baked_params = mats[0].get("params", {})
             orig_tex = orig_mats[0].get("textures", {})
             for inp_name, tex_info in orig_tex.items():
-                if inp_name not in baked_tex:
-                    src_file = tex_info.get("file")
-                    if not src_file:
-                        continue
-                    src_path = (base_dir / src_file).resolve()
-                    if src_path.exists():
-                        dst = _safe_copy(src_path, tex_dir)
-                        mats[0]["textures"][inp_name] = dict(
-                            tex_info, file=dst.relative_to(base_dir).as_posix(),
-                        )
-                    else:
-                        for alt_ext in (".jpg", ".png", ".jpeg"):
-                            alt_path = src_path.with_suffix(alt_ext)
-                            if alt_path.exists():
-                                dst = _safe_copy(alt_path, tex_dir)
-                                mats[0]["textures"][inp_name] = dict(
-                                    tex_info, file=dst.relative_to(base_dir).as_posix(),
-                                )
-                                break
+                if inp_name in baked_tex:
+                    continue
+                if inp_name in baked_params:
+                    # Baker resolved this to a scalar — trust it
+                    continue
+                src_file = tex_info.get("file")
+                if not src_file:
+                    continue
+                src_path = (base_dir / src_file).resolve()
+                if src_path.exists():
+                    dst = _safe_copy(src_path, tex_dir)
+                    mats[0]["textures"][inp_name] = dict(
+                        tex_info, file=dst.relative_to(base_dir).as_posix(),
+                    )
+                else:
+                    for alt_ext in (".jpg", ".png", ".jpeg"):
+                        alt_path = src_path.with_suffix(alt_ext)
+                        if alt_path.exists():
+                            dst = _safe_copy(alt_path, tex_dir)
+                            mats[0]["textures"][inp_name] = dict(
+                                tex_info, file=dst.relative_to(base_dir).as_posix(),
+                            )
+                            break
 
             # Merge displacement params the baker dropped (displacement lives
             # on the material node, not the surface shader, so the baker

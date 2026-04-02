@@ -178,7 +178,7 @@ class TestToThreejsPhysical:
         assert props["ior"]["value"] == 1.5
 
     def test_standard_surface_scalar_texture_neutralization(self, tmp_path, tiny_png):
-        """When texture exists, scalar should be set to neutral (1.0)."""
+        """When texture exists, color should carry the base weight."""
         tex_dir = tmp_path / "textures"
         tex_dir.mkdir()
         tex_file = tex_dir / "base_color.png"
@@ -191,8 +191,8 @@ class TestToThreejsPhysical:
             "textures": {"base_color": {"file": "textures/base_color.png"}},
         }
         props = to_threejs_physical(mat, tmp_path)
-        # With texture, color value should be neutral [1, 1, 1]
-        assert props["color"]["value"] == [1.0, 1.0, 1.0]
+        # With texture, color carries the base weight as multiplier
+        assert props["color"]["value"] == [0.5, 0.5, 0.5]
         assert "texture" in props["color"]
 
     def test_standard_surface_emission(self, tmp_path):
@@ -531,7 +531,9 @@ class TestEncodeTextureBase64:
 
 
 class TestAnisotropy:
-    def test_standard_surface_anisotropy(self, tmp_path):
+    def test_standard_surface_anisotropy_not_mapped(self, tmp_path):
+        """standard_surface anisotropy is intentionally not mapped — the models
+        are structurally incompatible (see comment in convert.py)."""
         mat = {
             "name": "Test",
             "shader_model": "standard_surface",
@@ -544,11 +546,8 @@ class TestAnisotropy:
             "textures": {},
         }
         props = to_threejs_physical(mat, tmp_path)
-        assert props["anisotropy"]["value"] == 0.7
-        # 0.25 × 2π ≈ 1.5708
-        assert props["anisotropyRotation"]["value"] == pytest.approx(
-            0.25 * 2.0 * 3.141592653589793
-        )
+        assert "anisotropy" not in props
+        assert "anisotropyRotation" not in props
 
     def test_gltf_pbr_anisotropy(self, tmp_path):
         mat = {
@@ -564,7 +563,9 @@ class TestAnisotropy:
         assert props["anisotropy"]["value"] == 0.5
         assert props["anisotropyRotation"]["value"] == 1.2
 
-    def test_open_pbr_surface_anisotropy(self, tmp_path):
+    def test_open_pbr_surface_anisotropy_not_mapped(self, tmp_path):
+        """open_pbr_surface anisotropy is intentionally not mapped — same
+        structural mismatch as standard_surface (see comment in convert.py)."""
         mat = {
             "name": "Test",
             "shader_model": "open_pbr_surface",
@@ -576,8 +577,7 @@ class TestAnisotropy:
             "textures": {},
         }
         props = to_threejs_physical(mat, tmp_path)
-        assert props["anisotropy"]["value"] == 0.6
-        assert "anisotropyRotation" not in props
+        assert "anisotropy" not in props
 
 
 class TestOcclusion:
