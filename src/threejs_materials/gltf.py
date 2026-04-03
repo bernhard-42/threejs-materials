@@ -206,6 +206,9 @@ class _GltfBuilder:
         texs = material.maps
         texture_dir = material.maps_dir
         tex_repeat = material.texture_repeat
+        # Skip no-op texture transform
+        if tex_repeat is not None and tex_repeat == (1.0, 1.0):
+            tex_repeat = None
 
         # vals/texs may be dataclasses or plain dicts (legacy)
         _vals = vals.to_dict() if hasattr(vals, "to_dict") else vals
@@ -587,6 +590,160 @@ def collect_gltf_textures(
     return _build_gltf(mat_list, name_list, binary=binary)
 
 
+# ---------------------------------------------------------------------------
+# glTF accessor helpers
+# ---------------------------------------------------------------------------
+
+_COMPONENT_DTYPES = {
+    5120: np.int8,
+    5121: np.uint8,
+    5122: np.int16,
+    5123: np.uint16,
+    5125: np.uint32,
+    5126: np.float32,
+}
+_TYPE_COUNTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
+
+
+def _read_accessor(gltf: GLTF2, accessor_idx: int) -> np.ndarray:
+    """Read a glTF accessor into a numpy array."""
+    acc = gltf.accessors[accessor_idx]
+    bv = gltf.bufferViews[acc.bufferView]
+    blob = gltf.binary_blob()
+    dtype = _COMPONENT_DTYPES[acc.componentType]
+    n_components = _TYPE_COUNTS[acc.type]
+    offset = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+    byte_stride = bv.byteStride
+    elem_size = np.dtype(dtype).itemsize * n_components
+
+    if byte_stride and byte_stride != elem_size:
+        # Strided: pick elements one by one
+        data = np.empty((acc.count, n_components), dtype=dtype)
+        for i in range(acc.count):
+            start = offset + i * byte_stride
+            data[i] = np.frombuffer(blob, dtype=dtype, count=n_components, offset=start)
+    else:
+        data = np.frombuffer(blob, dtype=dtype, count=acc.count * n_components, offset=offset)
+        if n_components > 1:
+            data = data.reshape(-1, n_components)
+
+    return data.copy()
+
+
+def _write_accessor(gltf: GLTF2, accessor_idx: int, data: np.ndarray) -> None:
+    """Write a numpy array back into a glTF accessor's buffer."""
+    acc = gltf.accessors[accessor_idx]
+    bv = gltf.bufferViews[acc.bufferView]
+    dtype = _COMPONENT_DTYPES[acc.componentType]
+    n_components = _TYPE_COUNTS[acc.type]
+    offset = (bv.byteOffset or 0) + (acc.byteOffset or 0)
+    byte_stride = bv.byteStride
+    elem_size = np.dtype(dtype).itemsize * n_components
+
+    blob = bytearray(gltf.binary_blob())
+    flat = data.astype(dtype).ravel()
+
+    if byte_stride and byte_stride != elem_size:
+        for i in range(acc.count):
+            start = offset + i * byte_stride
+            blob[start:start + elem_size] = flat[i * n_components:(i + 1) * n_components].tobytes()
+    else:
+        raw = flat.tobytes()
+        blob[offset:offset + len(raw)] = raw
+
+    # Update accessor min/max
+    if data.ndim == 1:
+        acc.min = [float(data.min())]
+        acc.max = [float(data.max())]
+    else:
+        acc.min = [float(x) for x in data.min(axis=0)]
+        acc.max = [float(x) for x in data.max(axis=0)]
+
+    gltf.set_binary_blob(bytes(blob))
+    if gltf.buffers:
+        gltf.buffers[0].byteLength = len(blob)
+
+
+def _normalize_primitive_uvs(gltf: GLTF2, mesh_idx: int, prim_idx: int, bbox_max_dim: float) -> None:
+    """Normalize UVs of a primitive using the middle-triangle approach.
+
+    Computes the surface partial derivatives (∂P/∂u, ∂P/∂v) from a triangle
+    near the centroid, then scales all UVs so that 1 UV unit ≈ bbox_max_dim
+    in physical space — matching ocp-tessellate's normalization.
+    """
+    prim = gltf.meshes[mesh_idx].primitives[prim_idx]
+
+    texcoord_idx = prim.attributes.TEXCOORD_0
+    position_idx = prim.attributes.POSITION
+    if texcoord_idx is None or position_idx is None:
+        return
+
+    positions = _read_accessor(gltf, position_idx).astype(np.float64)
+    uvs = _read_accessor(gltf, texcoord_idx).astype(np.float64)
+
+    if prim.indices is not None:
+        indices = _read_accessor(gltf, prim.indices).ravel().astype(np.int32)
+    else:
+        indices = np.arange(len(positions), dtype=np.int32)
+
+    num_triangles = len(indices) // 3
+    if num_triangles == 0:
+        return
+
+    tri_indices = indices.reshape(-1, 3)
+
+    # Find triangle closest to the centroid
+    centroid = positions.mean(axis=0)
+    tri_centroids = (
+        positions[tri_indices[:, 0]]
+        + positions[tri_indices[:, 1]]
+        + positions[tri_indices[:, 2]]
+    ) / 3.0
+    mid_tri = np.argmin(np.linalg.norm(tri_centroids - centroid, axis=1))
+
+    # Middle triangle vertices
+    i0, i1, i2 = tri_indices[mid_tri]
+    p0, p1, p2 = positions[i0], positions[i1], positions[i2]
+    uv0, uv1, uv2 = uvs[i0], uvs[i1], uvs[i2]
+
+    # Compute ∂P/∂u and ∂P/∂v from the triangle's Jacobian
+    dp1 = p1 - p0
+    dp2 = p2 - p0
+    duv1 = uv1 - uv0
+    duv2 = uv2 - uv0
+
+    det = duv1[0] * duv2[1] - duv2[0] * duv1[1]
+    if abs(det) < 1e-20:
+        return  # degenerate triangle in UV space
+
+    dPdu = (duv2[1] * dp1 - duv1[1] * dp2) / det
+    dPdv = (-duv2[0] * dp1 + duv1[0] * dp2) / det
+
+    scale_u = np.linalg.norm(dPdu)
+    scale_v = np.linalg.norm(dPdv)
+
+    uv_min = uvs.min(axis=0)
+
+    new_uvs = np.empty_like(uvs)
+    new_uvs[:, 0] = (
+        (uvs[:, 0] - uv_min[0]) * scale_u / bbox_max_dim
+        if scale_u > 1e-10
+        else 0.5
+    )
+    new_uvs[:, 1] = (
+        (uvs[:, 1] - uv_min[1]) * scale_v / bbox_max_dim
+        if scale_v > 1e-10
+        else 0.5
+    )
+
+    _write_accessor(gltf, texcoord_idx, new_uvs.astype(np.float32))
+
+
+# ---------------------------------------------------------------------------
+# inject_materials
+# ---------------------------------------------------------------------------
+
+
 def inject_materials(
     target_path: str,
     material_map: dict,
@@ -738,6 +895,31 @@ def inject_materials(
         _remap_tex_info(mat.emissiveTexture)
         _remap_extensions(mat.extensions)
         gltf.materials[mat_idx] = mat
+
+    # Normalize UVs for materials with normalize_uvs=True
+    normalize_mat_indices = {
+        mat_idx
+        for mat_idx, pbr in normalized.items()
+        if getattr(pbr, "normalize_uvs", True)
+    }
+    if normalize_mat_indices:
+        # Compute bbox_max_dim from all positions across the file
+        pos_min = np.full(3, np.inf)
+        pos_max = np.full(3, -np.inf)
+        for mesh in gltf.meshes:
+            for prim in mesh.primitives:
+                if prim.attributes.POSITION is not None:
+                    acc = gltf.accessors[prim.attributes.POSITION]
+                    if acc.min and acc.max:
+                        pos_min = np.minimum(pos_min, acc.min)
+                        pos_max = np.maximum(pos_max, acc.max)
+        dims = pos_max - pos_min
+        bbox_max_dim = max(float(dims.sum()) / 3.0, 1e-10)
+
+        for mesh_idx, mesh in enumerate(gltf.meshes):
+            for prim_idx, prim in enumerate(mesh.primitives):
+                if prim.material in normalize_mat_indices:
+                    _normalize_primitive_uvs(gltf, mesh_idx, prim_idx, bbox_max_dim)
 
     # Merge extensionsUsed
     extensions_used = set(gltf.extensionsUsed or [])
@@ -1017,6 +1199,7 @@ def _from_gltf(
             "license": "",
             "values": values,
             "textures": textures,
+            "normalize_uvs": False,
         }
         if texture_repeat is not None:
             data["texture_repeat"] = texture_repeat

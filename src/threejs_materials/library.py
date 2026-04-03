@@ -66,6 +66,7 @@ class PbrProperties:
     values: PbrValues = field(default_factory=PbrValues)
     maps: PbrMaps = field(default_factory=PbrMaps)
     texture_repeat: tuple | None = None
+    normalize_uvs: bool = True
     maps_dir: Path | None = field(default=None, repr=False)
 
     # -------------------------------------------------------------------
@@ -85,6 +86,7 @@ class PbrProperties:
             values=PbrValues.from_dict(data.get("values", {})),
             maps=PbrMaps.from_dict(data.get("textures", {})),
             texture_repeat=data.get("texture_repeat"),
+            normalize_uvs=data.get("normalize_uvs", True),
             maps_dir=Path(td) if td is not None else None,
         )
 
@@ -404,20 +406,25 @@ class PbrProperties:
             id=self.id, name=self.name, source=self.source,
             url=self.url, license=self.license,
             values=new_values, maps=new_maps,
-            texture_repeat=self.texture_repeat, maps_dir=self.maps_dir,
+            texture_repeat=self.texture_repeat, normalize_uvs=self.normalize_uvs,
+            maps_dir=self.maps_dir,
         )
 
-    def scale(self, u: float, v: float) -> PbrProperties:
+    def scale(self, u: float = 1, v: float = 1, fixed: bool = True) -> PbrProperties:
         """Return a new PbrProperties with texture scale applied.
 
         ``scale(2, 2)`` makes the texture appear 2x larger, which
         corresponds to ``textureRepeat = (0.5, 0.5)`` in Three.js.
+
+        When ``fixed=False``, raw (non-normalized) UVs are used, so texture
+        size depends on object geometry and matches glTF/glb export.
         """
         return PbrProperties(
             id=self.id, name=self.name, source=self.source,
             url=self.url, license=self.license,
             values=copy.deepcopy(self.values), maps=copy.deepcopy(self.maps),
-            texture_repeat=(1.0 / u, 1.0 / v), maps_dir=self.maps_dir,
+            texture_repeat=(1.0 / u, 1.0 / v), normalize_uvs=fixed,
+            maps_dir=self.maps_dir,
         )
 
     # -------------------------------------------------------------------
@@ -440,6 +447,8 @@ class PbrProperties:
         }
         if self.texture_repeat is not None:
             d["textureRepeat"] = list(self.texture_repeat)
+        if not self.normalize_uvs:
+            d["normalizeUvs"] = False
         return d
 
     def to_json(self, **kwargs) -> str:
@@ -482,6 +491,8 @@ class PbrProperties:
         ]
         if self.texture_repeat is not None:
             lines.append(f"  texture_repeat: {self.texture_repeat}")
+        if not self.normalize_uvs:
+            lines.append("  normalize_uvs: False")
         if self.maps_dir is not None and self.maps.to_dict():
             lines.append(f"  maps_dir: {self.maps_dir}")
         return "\n".join(lines)
