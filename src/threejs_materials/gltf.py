@@ -35,7 +35,7 @@ from threejs_materials.utils import (
 )
 
 if TYPE_CHECKING:
-    from threejs_materials.library import Material
+    from threejs_materials.library import PbrProperties as Material
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def _pack_metallic_roughness(
         r_img = None
 
     if m_img and r_img and m_img.size != r_img.size:
-        r_img = r_img.resize(m_img.size, PILImage.LANCZOS)
+        r_img = r_img.resize(m_img.size, PILImage.Resampling.LANCZOS)
         size = m_img.size
 
     # R channel = 0 (unused), G = roughness, B = metalness
@@ -118,7 +118,7 @@ def _merge_opacity_into_color(
     if color_ref:
         color_img = _open_texture_image(color_ref, texture_dir).convert("RGB")
         if color_img.size != opacity_img.size:
-            opacity_img = opacity_img.resize(color_img.size, PILImage.LANCZOS)
+            opacity_img = opacity_img.resize(color_img.size, PILImage.Resampling.LANCZOS)
     else:
         color_img = PILImage.new("RGB", opacity_img.size, (255, 255, 255))
 
@@ -770,8 +770,8 @@ def inject_materials(
     gltf = GLTF2.load(target_path)
 
     # Normalize values, converting GLTF2 objects on the fly.
-    _gltf_cache: dict[int, object] = {}
-    resolved: dict[int, object] = {}
+    _gltf_cache: dict[int, Material] = {}
+    resolved: dict[int, Material] = {}
     for node_idx, value in node_materials.items():
         if isinstance(value, GLTF2):
             obj_id = id(value)
@@ -784,7 +784,7 @@ def inject_materials(
 
     # Deduplicate PbrProperties by identity — one material index per unique object
     pbr_id_to_idx: dict[int, int] = {}
-    mat_map: dict[int, object] = {}
+    mat_map: dict[int, Material] = {}
 
     for node_idx, gltf_node in enumerate(gltf.nodes):
         if node_idx not in resolved or gltf_node.mesh is None:

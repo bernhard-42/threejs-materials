@@ -440,7 +440,7 @@ class PbrProperties:
                 k: v if _is_data_uri(v) else _resolve_to_data_uri(v, self.maps_dir)
                 for k, v in textures_d.items()
             }
-        d = {
+        d: dict[str, object] = {
             "id": self.id, "name": self.name, "source": self.source,
             "url": self.url, "license": self.license,
             "values": values_d, "textures": textures_d,

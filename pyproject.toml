@@ -10,7 +10,7 @@ dependencies = ["pillow>=10.0", "pygltflib>=1.16", "requests>=2.31.0"]
 
 [project.optional-dependencies]
 materialx = ["materialx>=1.39.4", "openexr>=3.3"]
-dev = ["bump-my-version", "twine", "build", "pytest"]
+dev = ["bump-my-version", "twine", "build", "pytest", "mypy", "types-requests"]
 
 [build-system]
 requires = ["setuptools>=80"]
@@ -36,6 +36,14 @@ replace = "{new_version}"
 filename = "pyproject.toml"
 search = 'version = "{current_version}"'
 replace = 'version = "{new_version}"'
+
+[tool.mypy]
+ignore_missing_imports = false
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["MaterialX.*", "pygltflib.*", "OpenEXR", "Imath"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

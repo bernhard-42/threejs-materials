@@ -102,7 +102,7 @@ def _resolve_to_data_uri(texture_ref: str, texture_dir: Path) -> str:
         return texture_ref
     file_path = texture_dir / texture_ref
     # Check for 1-bit/palette images that need conversion
-    img = PILImage.open(file_path)
+    img: PILImage.Image = PILImage.open(file_path)
     if img.mode in ("1", "P"):
         img = img.convert("L") if len(img.getbands()) == 1 else img.convert("RGB")
         buf = io.BytesIO()
@@ -132,6 +132,7 @@ def _open_texture_image(ref: str, texture_dir: Path | None = None):
     values are proper 0-255 uint8 (a 1-bit True would otherwise become
     1 instead of 255 in numpy arrays).
     """
+    img: PILImage.Image
     if _is_data_uri(ref):
         _, b64 = ref.split(",", 1)
         img = PILImage.open(io.BytesIO(base64.b64decode(b64)))
@@ -140,7 +141,7 @@ def _open_texture_image(ref: str, texture_dir: Path | None = None):
     else:
         img = PILImage.open(ref)
     if img.mode in ("1", "P"):
-        img = img.convert("L") if img.getbands() == ("1",) or len(img.getbands()) == 1 else img.convert("RGB")
+        img = img.convert("L") if len(img.getbands()) == 1 else img.convert("RGB")
     return img
 
 
@@ -178,8 +179,8 @@ def _average_texture_linear(
 ) -> tuple[float, float, float]:
     """Return the average color of a texture in linear RGB."""
     img = _open_texture_image(ref, texture_dir).convert("RGB")
-    avg = img.resize((1, 1), PILImage.LANCZOS).getpixel((0, 0))
-    r, g, b = (_srgb_to_linear(c / 255.0) for c in avg[:3])
+    avg = img.resize((1, 1), PILImage.Resampling.LANCZOS).getpixel((0, 0))
+    r, g, b = (_srgb_to_linear(c / 255.0) for c in avg[:3])  # type: ignore[misc]
     return (r, g, b)
 
 
@@ -188,7 +189,7 @@ def _parse_color_string(color: str) -> tuple[float, float, float]:
 
     Supports ``#rgb``, ``#rrggbb``, and CSS named colors (same set as Three.js).
     """
-    r, g, b = ImageColor.getrgb(color)
+    r, g, b = ImageColor.getrgb(color)[:3]
     return (
         _srgb_to_linear(r / 255.0),
         _srgb_to_linear(g / 255.0),
