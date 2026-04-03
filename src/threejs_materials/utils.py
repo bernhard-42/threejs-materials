@@ -95,11 +95,20 @@ def _resolve_to_data_uri(texture_ref: str, texture_dir: Path) -> str:
 
     If *texture_ref* is already a data URI it is returned unchanged.
     Otherwise it is treated as a filename relative to *texture_dir*
-    and the file is read and base64-encoded.
+    and the file is read and base64-encoded.  1-bit images are
+    converted to 8-bit before encoding.
     """
     if _is_data_uri(texture_ref):
         return texture_ref
     file_path = texture_dir / texture_ref
+    # Check for 1-bit/palette images that need conversion
+    img = PILImage.open(file_path)
+    if img.mode in ("1", "P"):
+        img = img.convert("L") if len(img.getbands()) == 1 else img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{b64}"
     mime, _ = mimetypes.guess_type(str(file_path))
     if mime is None:
         mime = {
@@ -117,13 +126,22 @@ def _resolve_to_data_uri(texture_ref: str, texture_dir: Path) -> str:
 
 
 def _open_texture_image(ref: str, texture_dir: Path | None = None):
-    """Open a texture as a PIL Image from a data URI or file path."""
+    """Open a texture as a PIL Image from a data URI or file path.
+
+    1-bit and palette images are converted to L or RGB so that pixel
+    values are proper 0-255 uint8 (a 1-bit True would otherwise become
+    1 instead of 255 in numpy arrays).
+    """
     if _is_data_uri(ref):
         _, b64 = ref.split(",", 1)
-        return PILImage.open(io.BytesIO(base64.b64decode(b64)))
-    if texture_dir is not None:
-        return PILImage.open(texture_dir / ref)
-    return PILImage.open(ref)
+        img = PILImage.open(io.BytesIO(base64.b64decode(b64)))
+    elif texture_dir is not None:
+        img = PILImage.open(texture_dir / ref)
+    else:
+        img = PILImage.open(ref)
+    if img.mode in ("1", "P"):
+        img = img.convert("L") if img.getbands() == ("1",) or len(img.getbands()) == 1 else img.convert("RGB")
+    return img
 
 
 def _has_real_alpha(ref: str, texture_dir: Path | None = None) -> bool:
