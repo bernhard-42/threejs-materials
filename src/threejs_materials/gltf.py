@@ -746,54 +746,67 @@ def _normalize_primitive_uvs(gltf: GLTF2, mesh_idx: int, prim_idx: int, bbox_max
 
 def inject_materials(
     target_path: str,
-    material_map: dict,
+    node_materials: dict,
 ) -> None:
-    """Replace materials in an existing glTF/GLB file with full PBR materials.
+    """Inject full PBR materials into an existing glTF/GLB file.
 
-    For each entry in *material_map*, the material at that index in the
-    target file is replaced with the corresponding material (including
-    textures and KHR extensions).  Materials not in the map are left
-    untouched.
-
-    Values may be ``Material`` objects or ``pygltflib.GLTF2`` objects.
-    ``GLTF2`` values are converted to ``Material`` automatically (using
-    the first material in the document), with deduplication by identity.
+    Takes a mapping of glTF node indices to PbrProperties (or GLTF2)
+    objects, deduplicates them, assigns material indices to mesh
+    primitives, injects full PBR data (textures, KHR extensions), and
+    optionally normalizes UVs for materials with ``normalize_uvs=True``.
 
     Parameters
     ----------
     target_path : str
         Path to an existing ``.gltf`` or ``.glb`` file.  The file is
         overwritten in place.
-    material_map : dict[int, Material | GLTF2]
-        Mapping of ``{material_index: Material_or_GLTF2}``.  Each key
-        is an index into the target file's ``materials`` array.
+    node_materials : dict[int, PbrProperties | GLTF2]
+        Mapping of ``{node_index: PbrProperties_or_GLTF2}``.
     """
-    if not material_map:
+    if not node_materials:
         return
 
     is_binary = target_path.endswith(".glb")
     gltf = GLTF2.load(target_path)
 
-    # Normalize all values, converting GLTF2 objects on the fly.
-    # Deduplicate GLTF2 conversion by object identity.
-    normalized: dict[int, Material] = {}
+    # Normalize values, converting GLTF2 objects on the fly.
     _gltf_cache: dict[int, object] = {}
-    for mat_idx, value in material_map.items():
+    resolved: dict[int, object] = {}
+    for node_idx, value in node_materials.items():
         if isinstance(value, GLTF2):
             obj_id = id(value)
             if obj_id not in _gltf_cache:
                 from threejs_materials.library import PbrProperties
                 _gltf_cache[obj_id] = PbrProperties.from_dict(_from_gltf(value, index=0))
-            normalized[mat_idx] = _gltf_cache[obj_id]
+            resolved[node_idx] = _gltf_cache[obj_id]
         else:
-            normalized[mat_idx] = value
+            resolved[node_idx] = value
+
+    # Deduplicate PbrProperties by identity — one material index per unique object
+    pbr_id_to_idx: dict[int, int] = {}
+    mat_map: dict[int, object] = {}
+
+    for node_idx, gltf_node in enumerate(gltf.nodes):
+        if node_idx not in resolved or gltf_node.mesh is None:
+            continue
+        pbr = resolved[node_idx]
+        obj_id = id(pbr)
+        if obj_id not in pbr_id_to_idx:
+            mat_idx = len(pbr_id_to_idx)
+            pbr_id_to_idx[obj_id] = mat_idx
+            mat_map[mat_idx] = pbr
+        for prim in gltf.meshes[gltf_node.mesh].primitives:
+            prim.material = pbr_id_to_idx[obj_id]
+
+    if not mat_map:
+        return
 
     # Build merged GLTF2 with deduplicated textures via collect_gltf_textures.
     # Use unique keys — materials with the same name but different content
     # (e.g. color overrides) must not be collapsed.
     tm_materials: dict[str, Material] = {}
     idx_to_name: dict[int, str] = {}
-    for mat_idx, material in normalized.items():
+    for mat_idx, material in mat_map.items():
         name = material.name or f"mat_{mat_idx}"
         if name in tm_materials:
             name = f"{name}_{mat_idx}"
@@ -899,7 +912,7 @@ def inject_materials(
     # Normalize UVs for materials with normalize_uvs=True
     normalize_mat_indices = {
         mat_idx
-        for mat_idx, pbr in normalized.items()
+        for mat_idx, pbr in mat_map.items()
         if getattr(pbr, "normalize_uvs", True)
     }
     if normalize_mat_indices:
