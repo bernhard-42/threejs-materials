@@ -6,7 +6,7 @@ Uses [pygltflib](https://pypi.org/project/pygltflib/) for standard glTF 2.0 file
 
 Supported input formats:
 
-- **glTF exports from [Blender](https://www.blender.org/)** — export a mesh with the desired material to a `.gltf` or `.glb` file and load it with `Material.load_gltf()`. All PBR textures are read automatically via pygltflib.
+- **glTF exports from [Blender](https://www.blender.org/)** — export a mesh with the desired material to a `.gltf` or `.glb` file and load it with `PbrProperties.load_gltf()`. All PBR textures are read automatically via pygltflib.
 - **MaterialX** — download [MaterialX](https://materialx.org/) materials on demand from four open sources, bake procedural graphs into flat textures, and cache results locally. See [MaterialX sources](#sources).
 
 <table>
@@ -19,6 +19,10 @@ Supported input formats:
 <td><img src="https://raw.githubusercontent.com/bernhard-42/threejs-materials/main/screenshots/CAD mode.png" width="400"></td>
 </tr>
 </table>
+
+## Migration from v0.x to v1.0.0
+
+v1.0.0 is a **breaking change**. The `Material` class has been replaced by typed dataclasses. See [Migration details](#migration-details) for a full guide.
 
 ## Installation
 
@@ -58,15 +62,15 @@ Note: For the latest Python, the installer tries to compile materialx and openex
 Blender supports two main ways of building materials:
 
 - **Texture materials** use image files, such as photos or painted maps, to define how a surface looks. They are straightforward to export and reuse because they rely on standard image data.
-- **Procedural materials** are generated mathematically inside Blender. They can create detailed, seamless looks and are easy to tweak, but they are more tied to Blender’s internal system.
+- **Procedural materials** are generated mathematically inside Blender. They can create detailed, seamless looks and are easy to tweak, but they are more tied to Blender's internal system.
 
 **glTF/GLB export**
 
-glTF and GLB exports handle texture materials reliably but struggle with complex procedural materials. In Blender’s glTF exporter, procedural features like shader node graphs (Noise, Voronoi, Wave, etc.) are typically not supported; they often export as a flat color or lose detail. To preserve the appearance, bake procedural materials into image textures first, converting them to standard texture materials.
+glTF and GLB exports handle texture materials reliably but struggle with complex procedural materials. In Blender's glTF exporter, procedural features like shader node graphs (Noise, Voronoi, Wave, etc.) are typically not supported; they often export as a flat color or lose detail. To preserve the appearance, bake procedural materials into image textures first, converting them to standard texture materials.
 
 **Baking**
 
-Baking turns a procedural material into image maps. Blender renders the material into texture files like base color, roughness, or normal maps, which then replace the procedural nodes. This ensures compatibility with glTF/GLB and other software unfamiliar with Blender’s procedural system. Use Blender’s built-in baking tools, or simplify the process with add-ons like SimpleBake.
+Baking turns a procedural material into image maps. Blender renders the material into texture files like base color, roughness, or normal maps, which then replace the procedural nodes. This ensures compatibility with glTF/GLB and other software unfamiliar with Blender's procedural system. Use Blender's built-in baking tools, or simplify the process with add-ons like SimpleBake.
 Workflow
 
 1. Apply the material to a mesh in Blender (.g. to the standard cube).
@@ -76,12 +80,12 @@ Workflow
 5. Load in Python:
 
    ```python
-   from threejs_materials import Material
-   materials = Material.load_gltf("brass_cube.gltf")   # .gltf or .glb
+   from threejs_materials import PbrProperties
+   materials = PbrProperties.load_gltf("brass_cube.gltf")   # .gltf or .glb
    brass = materials["Brushed brass"]  # access by material name
    ```
 
-That gives you a clean, portable material workflow: procedural inside Blender, baked to textures for export. Both .gltf  and  .glb  are supported, and texture file paths are typically resolved automatically during export.
+That gives you a clean, portable material workflow: procedural inside Blender, baked to textures for export. Both .gltf  and  .glb  are supported, and texture file paths are typically resolved automatically during export.
 
 #### Format mapping glTF → internal
 
@@ -103,7 +107,7 @@ That gives you a clean, portable material workflow: procedural inside Blender, b
 
 #### Limitations
 
-- **Multiple materials supported** — `load_gltf()` and `from_gltf()` return a `dict[str, Material]` keyed by material name. A Blender export with multiple materials is loaded in a single call.
+- **Multiple materials supported** — `load_gltf()` and `from_gltf()` return a `dict[str, PbrProperties]` keyed by material name. A Blender export with multiple materials is loaded in a single call.
 - **Geometry is ignored** — only the material and its textures are imported. The mesh, nodes, and scene hierarchy are discarded.
 - **No UV transforms** — `KHR_texture_transform` on the Blender side (offset, rotation) is imported as `texture_repeat` for the scale component only. Offset and rotation are not supported.
 - **glTF defaults applied** — when `metallicFactor` or `roughnessFactor` are absent, glTF defaults (1.0) are used. This is correct for texture-driven materials where the scalar is a neutral multiplier.
@@ -111,7 +115,7 @@ That gives you a clean, portable material workflow: procedural inside Blender, b
 
 ### 2 MaterialX
 
-The following source are available for MAterialX downloads
+The following sources are available for MaterialX downloads:
 
 | Source                                                   | Type                     | Shader model       |
 | -------------------------------------------------------- | ------------------------ | ------------------ |
@@ -146,7 +150,7 @@ Converted materials are cached in `~/.materialx-cache/` as a small JSON file (pr
         ...
 ```
 
-Textures are only base64-encoded when `to_dict()` is called (for sending to the Three.js viewer). This keeps the cache lightweight and allows multiple Materials to share the same texture files without duplicating large blobs in memory.
+Textures are only base64-encoded when `to_dict()` is called (for sending to the Three.js viewer). This keeps the cache lightweight and allows multiple materials to share the same texture files without duplicating large blobs in memory.
 
 To force re-conversion, clear the cache with `clear_cache(name=...)` or delete the files manually.
 
@@ -210,40 +214,33 @@ Anisotropy is only mapped for `gltf_pbr`, where `anisotropy_strength` correspond
 
 ### 1 Three.js (internal format)
 
-The internal format uses Three.js `MeshPhysicalMaterial` property names. Both MaterialX and glTF import pipelines produce the same structure. Each property carries a `value`, a `texture` reference (filename or data URI), or both.
+The internal format uses Three.js `MeshPhysicalMaterial` property names. Both MaterialX and glTF import pipelines produce the same structure. Scalar values live in `PbrValues`, texture references in `PbrMaps`.
 
-In memory, textures are stored as filenames relative to `_texture_dir`. When `to_dict()` is called (for the viewer), they are resolved to base64 data URIs:
+In memory, textures are stored as filenames relative to `maps_dir`. When `to_dict()` is called (for the viewer), they are resolved to base64 data URIs:
+
+```python
+mat = PbrProperties.from_gpuopen("Car Paint")
+mat.values   # PbrValues(color=[0.944, 0.776, 0.373], metalness=1.0, ...)
+mat.maps     # PbrMaps(roughness='roughness.png', normal='normal.png')
+mat.maps_dir # Path('~/.materialx-cache/gpuopen_car_paint_1k')
+```
+
+`to_dict()` output:
 
 ```json
 {
   "id": "Car Paint",
   "name": "Car Paint",
   "source": "gpuopen",
-  "properties": {
-    "color": {
-      "value": [0.944, 0.776, 0.373],
-      "texture": "data:image/png;base64,..."
-    },
-    "metalness": { "value": 1.0 },
-    "roughness": { "value": 0.5, "texture": "data:image/png;base64,..." },
-    "normal": { "texture": "data:image/png;base64,..." },
-    "ior": { "value": 1.5 }
-  }
-}
-```
-
-Parametric materials (PhysicallyBased) have values only:
-
-```json
-{
-  "id": "Gold",
-  "name": "Gold",
-  "source": "physicallybased",
-  "properties": {
-    "color": { "value": [1.059, 0.773, 0.307] },
-    "metalness": { "value": 1.0 },
-    "roughness": { "value": 0.0 },
-    "ior": { "value": 1.5 }
+  "values": {
+    "color": [0.944, 0.776, 0.373],
+    "metalness": 1.0,
+    "roughness": 0.5,
+    "ior": 1.5
+  },
+  "textures": {
+    "roughness": "data:image/png;base64,...",
+    "normal": "data:image/png;base64,..."
   }
 }
 ```
@@ -305,44 +302,14 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 | Dispersion                      | `KHR_materials_dispersion`        |
 | Texture repeat                  | `KHR_texture_transform`           |
 
-**Example:**
-
-```json
-{
-  "asset": { "version": "2.0", "generator": "threejs-materials" },
-  "images": [{ "uri": "data:image/png;base64,..." }],
-  "samplers": [
-    { "magFilter": 9729, "minFilter": 9987, "wrapS": 10497, "wrapT": 10497 }
-  ],
-  "textures": [{ "source": 0, "sampler": 0 }],
-  "materials": [
-    {
-      "name": "Car Paint",
-      "pbrMetallicRoughness": {
-        "baseColorFactor": [0.944, 0.776, 0.373, 1.0],
-        "baseColorTexture": { "index": 0 },
-        "metallicFactor": 1.0,
-        "roughnessFactor": 0.5,
-        "metallicRoughnessTexture": { "index": 1 }
-      },
-      "normalTexture": { "index": 2 },
-      "extensions": {
-        "KHR_materials_clearcoat": { "clearcoatFactor": 0.8 }
-      }
-    }
-  ],
-  "extensionsUsed": ["KHR_materials_clearcoat"]
-}
-```
-
 **Usage**
 
 - Save to file
 
   ```python
-  from threejs_materials import load_gpuopen
+  from threejs_materials import PbrProperties
 
-  mat = load_gpuopen("Car Paint")
+  mat = PbrProperties.from_gpuopen("Car Paint")
   mat.save_gltf("car-paint.gltf")   # .gltf + car-paint/ (texture files)
   mat.save_gltf("car-paint.glb")    # single binary file
   ```
@@ -350,7 +317,7 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 - Load from file
 
   ```python
-  materials = Material.load_gltf("scene.gltf")   # .gltf or .glb
+  materials = PbrProperties.load_gltf("scene.gltf")   # .gltf or .glb
   brass = materials["Brushed brass"]              # access by name
   ```
 
@@ -358,18 +325,18 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 
   ```python
   gltf = mat.to_gltf()                            # pygltflib.GLTF2
-  materials = Material.from_gltf(gltf)             # dict[str, Material]
+  materials = PbrProperties.from_gltf(gltf)        # dict[str, PbrProperties]
   ```
 
 - Multiple materials with texture deduplication
 
   ```python
-  from threejs_materials import collect_gltf_textures, load_gpuopen, load_physicallybased
+  from threejs_materials import PbrProperties, collect_gltf_textures
 
   materials = {
-      "body": load_gpuopen("Car Paint"),
-      "wood": load_gpuopen("Ivory Walnut Solid Wood"),
-      "glass": load_physicallybased("Glass"),
+      "body": PbrProperties.from_gpuopen("Car Paint"),
+      "wood": PbrProperties.from_gpuopen("Ivory Walnut Solid Wood"),
+      "glass": PbrProperties.from_physicallybased("Glass"),
   }
 
   gltf = collect_gltf_textures(materials)  # pygltflib.GLTF2
@@ -377,13 +344,15 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
 
 - Texture repeat
 
-  `Material.scale()` is exported as the `KHR_texture_transform` extension on each texture reference:
+  `scale()` is exported as the `KHR_texture_transform` extension on each texture reference:
 
   ```python
   tiled = mat.scale(2, 2)  # texture appears 2x larger
   gltf = tiled.to_gltf()
   # Each texture ref gets: "extensions": {"KHR_texture_transform": {"scale": [0.5, 0.5]}}
   ```
+
+  Note: `scale(1, 1)` is a no-op for glTF export — no `KHR_texture_transform` extension is added.
 
 ### Three.js ↔ glTF conversion
 
@@ -402,11 +371,11 @@ The glTF export is **visually lossless** for all properties except displacement.
 **Round-trip example**
 
 ```python
-from threejs_materials import load_gpuopen, Material
+from threejs_materials import PbrProperties
 
-m = load_gpuopen("Perforated Metal")
+m = PbrProperties.from_gpuopen("Perforated Metal")
 g = m.to_gltf()
-m2 = Material.from_gltf(g)["Perforated Metal"]
+m2 = PbrProperties.from_gltf(g)["Perforated Metal"]
 ```
 
 Results
@@ -414,34 +383,23 @@ Results
 - Original material (`m`):
 
   ```
-  _texture_dir: gpuopen_perforated_metal_1k
-  color: value=[1.0, 1.0, 1.0], texture='color.png'
-  metalness: value=1.0, texture='metalness.png'
-  roughness: value=1.0, texture='roughness.png'
-  normal: texture='normal.png'
-  specularIntensity: value=1.0
-  specularColor: value=[1.0, 1.0, 1.0]
-  ior: value=1.5
-  opacity: texture='opacity.png'
+  PbrProperties(name='Perforated Metal', source='gpuopen', license='MIT Public Domain')
+    values:  PbrValues(color=[0.665, 0.665, 0.665], metalness=1.0, ...)
+    maps:    PbrMaps(color='color.png', roughness='roughness.png', normal='normal.png', opacity='opacity.png')
   ```
 
 - After round-trip (`m2`):
 
   ```
-  color: value=[1.0, 1.0, 1.0], texture='data:image/...;base64,...'
-  metalness: value=1.0, texture='data:image/...;base64,...'
-  roughness: value=1.0, texture='data:image/...;base64,...'
-  normal: texture='data:image/...;base64,...'
-  ior: value=1.5
-  alphaTest: value=0.5
-  specularIntensity: value=1.0
-  specularColor: value=[1.0, 1.0, 1.0]
+  PbrProperties(name='Perforated Metal', source='gltf', license='')
+    values:  PbrValues(color=[0.665, 0.665, 0.665], metalness=1.0, alpha_test=0.5, ...)
+    maps:    PbrMaps(color='data:...;base64,...', metalness='data:...;base64,...', roughness='data:...;base64,...', normal='data:...;base64,...')
   ```
 
 What changed:
 
-- **`opacity` texture disappeared** — it was merged into the `color` texture's alpha channel (glTF has no separate opacity texture). The resulting RGBA `baseColorTexture` is now the `color` texture.
-- **`alphaTest: 0.5` appeared** — since the original had an opacity texture, `to_gltf()` sets `alphaMode: "MASK"` with `alphaCutoff: 0.5`. On import this becomes `alphaTest`.
+- **`opacity` map disappeared** — it was merged into the `color` texture's alpha channel (glTF has no separate opacity texture). The resulting RGBA `baseColorTexture` is now the `color` texture.
+- **`alpha_test: 0.5` appeared** — since the original had an opacity texture, `to_gltf()` sets `alphaMode: "MASK"` with `alphaCutoff: 0.5`. On import this becomes `alpha_test`.
 - **Separate `metalness` + `roughness` textures → packed and back** — glTF packs metalness and roughness into a single `metallicRoughnessTexture` (G=roughness, B=metalness). On import, this packed texture is assigned to both `metalness` and `roughness` properties (same texture, Three.js reads the correct channel from each).
 
 The visual result is identical — all changes are representation differences, not data loss.
@@ -459,20 +417,20 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 
 ### Loading from sources
 
-- `load_gpuopen(name, resolution="1K") -> Material`
-- `load_ambientcg(name, resolution="1K") -> Material`
-- `load_polyhaven(name, resolution="1K") -> Material`
-- `load_physicallybased(name, resolution="1K") -> Material`
+- `PbrProperties.from_gpuopen(name, resolution="1K") -> PbrProperties`
+- `PbrProperties.from_ambientcg(name, resolution="1K") -> PbrProperties`
+- `PbrProperties.from_polyhaven(name, resolution="1K") -> PbrProperties`
+- `PbrProperties.from_physicallybased(name, resolution="1K") -> PbrProperties`
 
   Download, convert, and cache a material.
 
   ```python
-  from threejs_materials import load_gpuopen, load_ambientcg, load_polyhaven, load_physicallybased
+  from threejs_materials import PbrProperties
 
-  mat = load_gpuopen("Car Paint", resolution="1K")
-  mat = load_ambientcg("Onyx015", resolution="1K")
-  mat = load_polyhaven("plank_flooring_04", resolution="1K")
-  mat = load_physicallybased("Titanium")
+  mat = PbrProperties.from_gpuopen("Car Paint", resolution="1K")
+  mat = PbrProperties.from_ambientcg("Onyx015", resolution="1K")
+  mat = PbrProperties.from_polyhaven("plank_flooring_04", resolution="1K")
+  mat = PbrProperties.from_physicallybased("Titanium")
   ```
 
   The first call downloads and converts the material (takes a few seconds). Subsequent calls return the cached JSON instantly from `~/.materialx-cache/`.
@@ -505,37 +463,37 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   #   load_physicallybased  https://physicallybased.info/
   ```
 
-- `Material.from_mtlx(mtlx_file) -> Material`
+- `PbrProperties.from_mtlx(mtlx_file) -> PbrProperties`
 
   Convert a local `.mtlx` file without downloading anything.
 
   ```python
-  from threejs_materials import Material
+  from threejs_materials import PbrProperties
 
-  mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
+  mat = PbrProperties.from_mtlx("examples/gpuo-car-paint.mtlx")
   ```
 
   Texture paths in the `.mtlx` are resolved relative to the file's location.
 
 ### Customization
 
-- `material.override(**props) -> Material`
+- `material.override(**props) -> PbrProperties`
 
-  Return a new `Material` with property overrides. The original material is not modified.
+  Return a new `PbrProperties` with value overrides. The original material is not modified.
 
   ```python
-  from threejs_materials import load_gpuopen
+  from threejs_materials import PbrProperties
 
-  mat = load_gpuopen("Car Paint")
+  mat = PbrProperties.from_gpuopen("Car Paint")
   red_paint = mat.override(color=(0.8, 0.1, 0.1))
   rough_red = mat.override(color=(0.8, 0.1, 0.1), roughness=0.9)
   ```
 
-  Overrides set the `value` of the named property, creating it if absent. Existing textures are preserved. Calls can be chained: `mat.override(color=(1,0,0)).override(roughness=0.5)`.
+  Overrides set the value of the named property, creating it if absent. Existing textures are preserved. Calls can be chained: `mat.override(color=(1,0,0)).override(roughness=0.5)`.
 
-- `material.scale(u, v) -> Material`
+- `material.scale(u, v, fixed=True) -> PbrProperties`
 
-  Return a new `Material` with texture scaling applied. The original material is not modified.
+  Return a new `PbrProperties` with texture scaling applied. The original material is not modified.
 
   ```python
   tiled = mat.scale(3, 3)      # texture appears 3x larger
@@ -544,26 +502,44 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 
   `scale(u, v)` sets `texture_repeat = (1/u, 1/v)` internally. In Three.js this maps to `texture.repeat`, in glTF it is exported as `KHR_texture_transform` with `scale: [1/u, 1/v]`. Can be chained with `override()`: `mat.override(color=(1,0,0)).scale(2, 2)`.
 
+### Texture scaling
+
+The `fixed` parameter on `scale()` controls how UVs are interpreted:
+
+- **`fixed=True`** (default): The viewer normalizes UVs so that texture density is independent of object size. A brushed aluminum pattern looks the same on a small bracket and a large panel. This is the physically correct behavior for CAD — materials have a fixed physical scale.
+
+- **`fixed=False`**: Raw parametric UVs are used. Texture size depends on object geometry, matching standard glTF/GLB viewer behavior.
+
+```python
+# Fixed physical scale (default) — same texture density on all parts
+wood = PbrProperties.from_gpuopen("Walnut").scale(2, 2)
+
+# Geometry-dependent — texture tiles based on surface parameterization
+wood_raw = PbrProperties.from_gpuopen("Walnut").scale(2, 2, fixed=False)
+```
+
+The `normalize_uvs` flag is serialized in `to_dict()` as `"normalizeUvs": false` when disabled. Materials imported from glTF (`from_gltf`, `load_gltf`) default to `normalize_uvs=False` since glTF UVs are already baked into the mesh.
+
 ### Import and Export
 
-- `Material.from_mtlx(mtlx_file) -> Material`
+- `PbrProperties.from_mtlx(mtlx_file) -> PbrProperties`
 
   Convert a local `.mtlx` file. Texture paths are resolved relative to the file's location. See [MaterialX](#materialx) for details.
 
   ```python
-  mat = Material.from_mtlx("examples/gpuo-car-paint.mtlx")
+  mat = PbrProperties.from_mtlx("examples/gpuo-car-paint.mtlx")
   ```
 
-- `Material.load_gltf(gltf_file) -> dict[str, Material]`
+- `PbrProperties.load_gltf(gltf_file) -> dict[str, PbrProperties]`
 
   Load all materials from a `.gltf` or `.glb` file on disk. Returns a dict keyed by material name. Uses pygltflib to read the file and resolve textures automatically. Ideal for importing Blender glTF exports.
 
   ```python
-  materials = Material.load_gltf("brass_cube.gltf")   # or .glb
+  materials = PbrProperties.load_gltf("brass_cube.gltf")   # or .glb
   brass = materials["Brushed brass"]
   ```
 
-- `Material.from_gltf(gltf) -> dict[str, Material]`
+- `PbrProperties.from_gltf(gltf) -> dict[str, PbrProperties]`
 
   Import all materials from a `pygltflib.GLTF2` object. Returns a dict keyed by material name. Accepts both file-referenced and data-URI images (file references are converted to data URIs automatically). See [Three.js ↔ glTF conversion](#threejs--gltf-conversion) for round-trip behavior.
 
@@ -571,7 +547,7 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   from pygltflib import GLTF2
 
   gltf = GLTF2().load("scene.gltf")
-  materials = Material.from_gltf(gltf)
+  materials = PbrProperties.from_gltf(gltf)
   body = materials["Car Paint"]
   glass = materials["Glass"]
   ```
@@ -599,11 +575,11 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   Convert multiple materials to a `pygltflib.GLTF2` with shared, deduplicated textures. Returns the same type as `to_gltf()`. See [glTF](#gltf) for details.
 
   ```python
-  from threejs_materials import collect_gltf_textures, load_gpuopen, load_physicallybased
+  from threejs_materials import PbrProperties, collect_gltf_textures
 
   gltf = collect_gltf_textures({
-      "body": load_gpuopen("Car Paint"),
-      "glass": load_physicallybased("Glass"),
+      "body": PbrProperties.from_gpuopen("Car Paint"),
+      "glass": PbrProperties.from_physicallybased("Glass"),
   })
   ```
 
@@ -611,7 +587,7 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 
 - `material.dump(gltf=False, json_format=False) -> str`
 
-  Return a human-readable summary of the material. Textures are abbreviated to `'data:image/png;base64,...'`. Also used by `repr(material)`.
+  Return a human-readable summary of the material. Textures are abbreviated. Also used by `repr(material)`.
 
   ```python
   print(mat.dump())                          # Three.js properties, text
@@ -625,9 +601,9 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   Estimate a single representative sRGB color from a material — useful for CAD viewers that need a flat color per object while keeping a material dictionary for full PBR rendering.
 
   ```python
-  from threejs_materials import load_gpuopen
+  from threejs_materials import PbrProperties
 
-  wood = load_gpuopen("Ivory Walnut Solid Wood")
+  wood = PbrProperties.from_gpuopen("Ivory Walnut Solid Wood")
   materials = {"wood": wood}      # keep for full PBR rendering
   object.material = "wood"
   object.color = wood.interpolate_color()   # (0.53, 0.31, 0.18, 1.0)
@@ -648,15 +624,22 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 
 ### Cache management
 
-- `list_cache() -> list[tuple[str, str]]`
+- `list_cache(as_json=False)`
 
-  List cached materials as `(source, name)` tuples.
+  Print a grouped summary of cached materials, or return a list of tuples.
 
   ```python
   from threejs_materials import list_cache
 
   list_cache()
-  # [('ambientcg', 'Metal 009'), ('gpuopen', 'Car Paint'), ...]
+  # gpuopen
+  #   - Aluminum Brushed
+  #   - Car Paint
+  # ambientcg
+  #   - Metal 009
+
+  list_cache(as_json=True)
+  # [('ambientcg', 'Metal 009'), ('gpuopen', 'Aluminum Brushed'), ...]
   ```
 
 - `clear_cache(name=None, source=None) -> int`
@@ -680,17 +663,16 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 const data = JSON.parse(jsonStr);
 const material = new THREE.MeshPhysicalMaterial();
 
-for (const [key, prop] of Object.entries(data.properties)) {
-  if (prop.texture) {
-    material[key] = new THREE.TextureLoader().load(prop.texture);
+for (const [key, value] of Object.entries(data.values)) {
+  if (Array.isArray(value) && value.length === 3) {
+    material[key] = new THREE.Color(...value);
+  } else {
+    material[key] = value;
   }
-  if (prop.value !== undefined) {
-    if (Array.isArray(prop.value) && prop.value.length === 3) {
-      material[key] = new THREE.Color(...prop.value);
-    } else {
-      material[key] = prop.value;
-    }
-  }
+}
+
+for (const [key, textureUri] of Object.entries(data.textures)) {
+  material[PROPERTY_TO_MAP[key]] = new THREE.TextureLoader().load(textureUri);
 }
 ```
 
@@ -733,39 +715,80 @@ Alternatively, when injecting materials into an existing glTF file (e.g. from bu
 [build123d](https://github.com/gumyr/build123d) exports glTF geometry via OCCT's `RWGltf_CafWriter`, which handles meshes, nodes, and flat colors. To add PBR materials, post-process the generated glTF file by injecting material data from threejs-materials:
 
 ```python
-import json
 from build123d import export_gltf
-from threejs_materials import collect_gltf_textures, load_gpuopen, load_physicallybased
+from threejs_materials import PbrProperties, inject_materials
 
-# 1. Build your CAD model
-# ...
+# 1. Build your CAD model and assign materials
+body.material = Material.create("body", pbr=PbrProperties.from_gpuopen("Car Paint"))
+wood.material = Material.create("wood", pbr=PbrProperties.from_gpuopen("Walnut").scale(2, 2))
 
-# 2. Export geometry to glTF
-export_gltf(my_shape, "model.gltf")
-
-# 3. Load PBR materials
-materials = {
-    "body":  load_gpuopen("Car Paint").override(color=(0.8, 0.1, 0.1)),
-    "wood":  load_gpuopen("Ivory Walnut Solid Wood").scale(2, 2),
-    "glass": load_physicallybased("Glass"),
-}
-
-# 4. Convert to glTF arrays (shared, deduplicated textures)
-mat_data = collect_gltf_textures(materials)
-
-# 5. Inject materials into the geometry glTF
-with open("model.gltf") as f:
-    gltf = json.load(f)
-
-gltf["images"] = mat_data.get("images", [])
-gltf["samplers"] = mat_data.get("samplers", [])
-gltf["textures"] = mat_data.get("textures", [])
-gltf["materials"] = mat_data["materials"]
-if "extensionsUsed" in mat_data:
-    gltf.setdefault("extensionsUsed", []).extend(mat_data["extensionsUsed"])
-
-with open("model.gltf", "w") as f:
-    json.dump(gltf, f)
+# 2. Export geometry to glTF (materials are injected automatically)
+export_gltf(assembly, "model.glb")
 ```
 
-The material names in the `materials` dict must match the material/color names assigned to shapes in the OCCT export so that mesh primitives reference the correct material index.
+The `export_gltf` function in build123d automatically detects PBR materials on shapes and calls `inject_materials` to replace the OCCT-generated placeholder materials with full PBR data including textures and KHR extensions.
+
+## Migration details
+
+### API changes
+
+| v0.x | v1.0.0 |
+|------|--------|
+| `Material(data_dict)` | `PbrProperties.from_dict(data_dict)` |
+| `Material.gpuopen.load("Car Paint")` | `PbrProperties.from_gpuopen("Car Paint")` |
+| `Material.ambientcg.load("Onyx015")` | `PbrProperties.from_ambientcg("Onyx015")` |
+| `Material.polyhaven.load("plank")` | `PbrProperties.from_polyhaven("plank")` |
+| `Material.physicallybased.load("Gold")` | `PbrProperties.from_physicallybased("Gold")` |
+| `Material.from_gltf(gltf)` | `PbrProperties.from_gltf(gltf)` |
+| `Material.load_gltf("file.glb")` | `PbrProperties.load_gltf("file.glb")` |
+| `Material.from_mtlx("file.mtlx")` | `PbrProperties.from_mtlx("file.mtlx")` |
+| `Material.list_sources()` | `from threejs_materials.sources import list_sources` |
+| `Material.list_cache()` | `from threejs_materials import list_cache` |
+| `Material.clear_cache()` | `from threejs_materials import clear_cache` |
+
+### Data model changes
+
+The `properties` dict has been replaced by two typed dataclasses:
+
+| v0.x | v1.0.0 |
+|------|--------|
+| `mat.properties["color"]["value"]` | `mat.values.color` |
+| `mat.properties["color"]["texture"]` | `mat.maps.color` |
+| `mat.properties["normalScale"]["value"]` | `mat.values.normal_scale` |
+| `mat.properties["sheenColor"]["value"]` | `mat.values.sheen_color` |
+| `mat.properties["specularIntensity"]["value"]` | `mat.values.specular_intensity` |
+
+- **`PbrValues`** holds scalar values with snake_case field names
+- **`PbrMaps`** holds texture references (file paths or data URIs) with snake_case field names
+- Field names are automatically mapped to camelCase for Three.js/glTF output via `to_dict()`
+- All fields support IDE tab completion
+
+### JSON format changes
+
+The `to_dict()` output format has changed:
+
+```json
+// v0.x
+{"properties": {"color": {"value": [1, 0, 0], "texture": "data:..."}}}
+
+// v1.0.0
+{"values": {"color": [1, 0, 0]}, "textures": {"color": "data:..."}}
+```
+
+### Cache
+
+The cache format changed from `"properties"` to `"values"` + `"textures"`. After upgrading, clear the cache:
+
+```python
+from threejs_materials import clear_cache
+clear_cache()
+```
+
+### New in v1.0.0
+
+- `PbrProperties.from_gpuopen()`, `from_ambientcg()`, `from_polyhaven()`, `from_physicallybased()` classmethods with full IDE tab completion
+- `PbrProperties.create()` for building materials from explicit values and texture paths
+- `normalize_uvs` flag for UV mode control (see [Texture scaling](#texture-scaling))
+- `scale(u, v, fixed=True/False)` — `fixed=True` (default) normalizes UVs for size-independent texture density
+- `list_cache()` prints grouped summary by default, `list_cache(as_json=True)` for tuples
+- `clear_cache()` prints success messages
