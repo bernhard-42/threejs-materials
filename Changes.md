@@ -1,3 +1,11 @@
+# v1.0.1
+
+## Fixes
+
+- **1-bit boolean textures** (e.g. ambientCG metalness maps) now correctly convert to 8-bit. Previously, boolean `True` became `1` instead of `255` in the packed metallicRoughness texture, making metallic materials appear non-metallic in glTF viewers.
+- **`inject_materials` API change** — now accepts node indices (instead of material indices), handles deduplication and primitive-to-material assignment internally. This moves the logic from the build123d exporter into threejs-materials where it belongs.
+- Added `py.typed` marker for PEP 561 type checking support and fixed all mypy errors.
+
 # v1.0.0
 
 ## Features
