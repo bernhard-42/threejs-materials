@@ -203,6 +203,7 @@ def extract_materials(doc) -> list[dict]:
         }
         shader_nodes = mx.getShaderNodes(mat_node)
         if not shader_nodes:
+            log.warning("Material '%s' has no shader nodes — skipping", mat_node.getName())
             continue
         shader = shader_nodes[0]
         mat_info["shader_model"] = shader.getCategory()
@@ -575,6 +576,14 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
     if disp_scale is not None:
         val("displacementScale", disp_scale)
 
+    # Warn if no meaningful properties were extracted
+    non_disp = {k: v for k, v in props.items() if k not in ("displacement", "displacementScale")}
+    if not non_disp:
+        log.warning(
+            "Material '%s' (model=%s) produced no PBR properties",
+            mat.get("name", "?"), model,
+        )
+
     return props
 
 
@@ -732,7 +741,7 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None, Path]:
         mats = []
 
     if not mats:
-        log.info("Fallback: using original document for %s", mtlx_path.name)
+        log.warning("Baking produced no materials for %s — falling back to original", mtlx_path.name)
         mats = orig_mats
 
     # Merge textures the baker missed from the original.
@@ -782,4 +791,12 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None, Path]:
 
     mat = mats[0]
     properties = to_threejs_physical(mat, base_dir)
+
+    if not properties:
+        log.warning(
+            "Conversion of '%s' produced empty properties — "
+            "material may appear white or missing",
+            mat.get("name", mtlx_path.name),
+        )
+
     return properties, mat.get("shader_model"), base_dir

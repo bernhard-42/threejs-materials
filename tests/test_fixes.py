@@ -349,3 +349,130 @@ class TestAlwaysBakeProcedural:
         assert color is not None, "color must be present after baking"
         assert color[0] > 0.9, f"expected brass red ~0.95, got {color[0]}"
         assert color[2] < 0.5, f"expected brass blue ~0.37, got {color[2]}"
+
+
+# ---------------------------------------------------------------------------
+# Fix: Silent failures in conversion pipeline
+#
+# Multiple code paths silently swallowed errors, producing empty materials
+# that then got cached permanently. Now all failure points log warnings
+# and empty results are never cached.
+# ---------------------------------------------------------------------------
+
+
+class TestSilentFailures:
+    def test_extract_materials_warns_on_no_shader_nodes(self, caplog):
+        """extract_materials must log a warning when a material has no shader nodes."""
+        if not _materialx_available():
+            pytest.skip("MaterialX not installed")
+        import logging
+        import tempfile
+        from pathlib import Path
+        from threejs_materials.convert import extract_materials, load_document_with_stdlib
+
+        # A material with no surfaceshader connection
+        mtlx = """\
+<?xml version="1.0" encoding="utf-8"?>
+<materialx version="1.38">
+  <surfacematerial name="Empty" type="material">
+  </surfacematerial>
+</materialx>
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "empty.mtlx"
+            p.write_text(mtlx)
+            doc, _ = load_document_with_stdlib(p)
+            with caplog.at_level(logging.WARNING, logger="threejs_materials.convert"):
+                result = extract_materials(doc)
+
+        assert result == []
+        assert "no shader nodes" in caplog.text.lower()
+
+    def test_to_threejs_physical_warns_on_empty_output(self, caplog):
+        """to_threejs_physical must warn when no PBR properties are produced."""
+        import logging
+        from pathlib import Path
+        from threejs_materials.convert import to_threejs_physical
+
+        mat = {
+            "name": "Empty",
+            "shader_model": "unsupported_model_xyz",
+            "params": {},
+            "textures": {},
+        }
+        with caplog.at_level(logging.WARNING, logger="threejs_materials.convert"):
+            props = to_threejs_physical(mat, Path("/tmp"))
+
+        assert not props  # empty or only displacement
+        assert "no pbr properties" in caplog.text.lower()
+
+    def test_empty_material_not_cached(self, tmp_path, monkeypatch):
+        """_SourceLoader.load must not write empty materials to cache."""
+        from threejs_materials.sources import CACHE_DIR
+
+        monkeypatch.setattr("threejs_materials.sources.CACHE_DIR", tmp_path)
+
+        # Simulate: _process_mtlx returns empty properties
+        def fake_process_mtlx(path):
+            return {}, None, path.parent
+
+        monkeypatch.setattr("threejs_materials.sources._process_mtlx", fake_process_mtlx)
+
+        # Simulate: source fetch returns a result with mtlx_path
+        from threejs_materials.sources.common import SourceResult
+        from threejs_materials.sources import _SourceLoader
+
+        class FakeModule:
+            BROWSE_URL = "https://example.com"
+            @staticmethod
+            def fetch(name, res, out_dir):
+                mtlx = out_dir / "test.mtlx"
+                mtlx.write_text("")
+                return SourceResult(mtlx_path=mtlx, license="test", url="")
+
+        loader = _SourceLoader("gpuopen")
+        monkeypatch.setattr(
+            "threejs_materials.sources._SOURCE_MODULES",
+            {"gpuopen": FakeModule},
+        )
+
+        result = loader.load("EmptyMat")
+
+        # Result should have empty values
+        assert result["values"] == {}
+        # No cache file should exist
+        cache_files = list(tmp_path.glob("*.json"))
+        assert len(cache_files) == 0, f"Empty material was cached: {cache_files}"
+
+    def test_process_mtlx_warns_on_empty_properties(self, caplog):
+        """_process_mtlx must warn when conversion produces empty properties."""
+        if not _materialx_available():
+            pytest.skip("MaterialX not installed")
+        import logging
+        import tempfile
+        from pathlib import Path
+        from threejs_materials.convert import _process_mtlx
+
+        # A material with unsupported shader model
+        mtlx = """\
+<?xml version="1.0" encoding="utf-8"?>
+<materialx version="1.38">
+  <surface name="SR_weird" type="surfaceshader">
+  </surface>
+  <surfacematerial name="Weird" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_weird" />
+  </surfacematerial>
+</materialx>
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "weird.mtlx"
+            p.write_text(mtlx)
+            with caplog.at_level(logging.WARNING, logger="threejs_materials.convert"):
+                properties, _, _ = _process_mtlx(p)
+
+        # Should have warned about empty/unsupported
+        assert any(
+            "no pbr properties" in r.message.lower() or
+            "unsupported" in r.message.lower()
+            for r in caplog.records
+        )

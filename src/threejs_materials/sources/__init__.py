@@ -140,6 +140,22 @@ class _SourceLoader:
                 if "texture" in prop:
                     textures[k] = prop["texture"]
 
+        # Never cache empty results — they'd persist and mask the real problem
+        if not values and not textures:
+            print(
+                f"WARNING: {label} produced empty material — not cached. "
+                "Re-run to retry, or check MaterialX baking output."
+            )
+            return {
+                "id": name,
+                "name": name,
+                "source": self._source,
+                "url": result.url,
+                "license": result.license,
+                "values": values,
+                "textures": textures,
+            }
+
         output = {
             "id": name,
             "name": name,
