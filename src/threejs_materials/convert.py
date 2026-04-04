@@ -717,68 +717,68 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None, Path]:
 
     has_textures = any(m["textures"] for m in orig_mats)
 
-    if has_textures:
-        baked_mtlx = base_dir / "material.baked.mtlx"
-        try:
-            bake_materials(
-                doc, search_path, baked_mtlx, tex_dir, mtlx_dir=base_dir,
-            )
-            baked_doc, _ = load_document_with_stdlib(baked_mtlx)
-            mats = extract_materials(baked_doc)
-        except Exception as e:
-            log.warning("Baking failed for %s: %s — using original doc", mtlx_path, e)
-            mats = []
+    # Always bake: even materials without textures may have procedural
+    # node graphs (e.g. GPUOpen "Brass") whose colors are only resolved
+    # by the TextureBaker.
+    baked_mtlx = base_dir / "material.baked.mtlx"
+    try:
+        bake_materials(
+            doc, search_path, baked_mtlx, tex_dir, mtlx_dir=base_dir,
+        )
+        baked_doc, _ = load_document_with_stdlib(baked_mtlx)
+        mats = extract_materials(baked_doc)
+    except Exception as e:
+        log.warning("Baking failed for %s: %s — using original doc", mtlx_path, e)
+        mats = []
 
-        if not mats:
-            log.info("Fallback: using original document for %s", mtlx_path.name)
-            mats = orig_mats
-
-        # Merge textures the baker missed from the original.
-        # The baker sometimes collapses a texture to a single sampled
-        # scalar (e.g. normal → [0.5, 0.5, 1.0], roughness → 0.3).
-        # Only merge back an original texture if:
-        # 1. The baker didn't produce a baked texture for this input, AND
-        # 2. The baker also didn't produce a scalar value for it
-        #    (a scalar means the baker intentionally resolved the
-        #    procedural graph, e.g. channel extraction from a packed
-        #    texture — merging back the raw packed texture would be wrong)
-        if mats and orig_mats and mats is not orig_mats:
-            baked_tex = mats[0].get("textures", {})
-            baked_params = mats[0].get("params", {})
-            orig_tex = orig_mats[0].get("textures", {})
-            for inp_name, tex_info in orig_tex.items():
-                if inp_name in baked_tex:
-                    continue
-                if inp_name in baked_params:
-                    # Baker resolved this to a scalar — trust it
-                    continue
-                src_file = tex_info.get("file")
-                if not src_file:
-                    continue
-                src_path = (base_dir / src_file).resolve()
-                if src_path.exists():
-                    dst = _safe_copy(src_path, tex_dir)
-                    mats[0]["textures"][inp_name] = dict(
-                        tex_info, file=dst.relative_to(base_dir).as_posix(),
-                    )
-                else:
-                    for alt_ext in (".jpg", ".png", ".jpeg"):
-                        alt_path = src_path.with_suffix(alt_ext)
-                        if alt_path.exists():
-                            dst = _safe_copy(alt_path, tex_dir)
-                            mats[0]["textures"][inp_name] = dict(
-                                tex_info, file=dst.relative_to(base_dir).as_posix(),
-                            )
-                            break
-
-            # Merge displacement params the baker dropped (displacement lives
-            # on the material node, not the surface shader, so the baker
-            # never sees it).
-            orig_params = orig_mats[0].get("params", {})
-            if "displacement_scale" in orig_params and "displacement_scale" not in baked_params:
-                mats[0]["params"]["displacement_scale"] = orig_params["displacement_scale"]
-    else:
+    if not mats:
+        log.info("Fallback: using original document for %s", mtlx_path.name)
         mats = orig_mats
+
+    # Merge textures the baker missed from the original.
+    # The baker sometimes collapses a texture to a single sampled
+    # scalar (e.g. normal → [0.5, 0.5, 1.0], roughness → 0.3).
+    # Only merge back an original texture if:
+    # 1. The baker didn't produce a baked texture for this input, AND
+    # 2. The baker also didn't produce a scalar value for it
+    #    (a scalar means the baker intentionally resolved the
+    #    procedural graph, e.g. channel extraction from a packed
+    #    texture — merging back the raw packed texture would be wrong)
+    if mats and orig_mats and mats is not orig_mats:
+        baked_tex = mats[0].get("textures", {})
+        baked_params = mats[0].get("params", {})
+        orig_tex = orig_mats[0].get("textures", {})
+        for inp_name, tex_info in orig_tex.items():
+            if inp_name in baked_tex:
+                continue
+            if inp_name in baked_params:
+                # Baker resolved this to a scalar — trust it
+                continue
+            src_file = tex_info.get("file")
+            if not src_file:
+                continue
+            src_path = (base_dir / src_file).resolve()
+            if src_path.exists():
+                dst = _safe_copy(src_path, tex_dir)
+                mats[0]["textures"][inp_name] = dict(
+                    tex_info, file=dst.relative_to(base_dir).as_posix(),
+                )
+            else:
+                for alt_ext in (".jpg", ".png", ".jpeg"):
+                    alt_path = src_path.with_suffix(alt_ext)
+                    if alt_path.exists():
+                        dst = _safe_copy(alt_path, tex_dir)
+                        mats[0]["textures"][inp_name] = dict(
+                            tex_info, file=dst.relative_to(base_dir).as_posix(),
+                        )
+                        break
+
+        # Merge displacement params the baker dropped (displacement lives
+        # on the material node, not the surface shader, so the baker
+        # never sees it).
+        orig_params = orig_mats[0].get("params", {})
+        if "displacement_scale" in orig_params and "displacement_scale" not in baked_params:
+            mats[0]["params"]["displacement_scale"] = orig_params["displacement_scale"]
 
     mat = mats[0]
     properties = to_threejs_physical(mat, base_dir)

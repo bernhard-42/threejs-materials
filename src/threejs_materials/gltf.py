@@ -937,7 +937,7 @@ def inject_materials(
     # Merge extensionsUsed
     extensions_used = set(gltf.extensionsUsed or [])
     extensions_used.update(merged.extensionsUsed or [])
-    gltf.extensionsUsed = sorted(extensions_used) if extensions_used else None
+    gltf.extensionsUsed = sorted(extensions_used) if extensions_used else []
 
     # Save back
     if is_binary:
