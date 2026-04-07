@@ -1,3 +1,22 @@
+# v1.0.3
+
+## Fixes
+
+- **Never cache empty materials** — when baking or conversion produces empty values/textures, the result is no longer written to `~/.materialx-cache/`. Previously, a failed bake on Windows would cache an empty material permanently.
+- **Logging for silent failures** — all silent fallback paths in the conversion pipeline now log warnings:
+  - `extract_materials()` warns when a material has no shader nodes
+  - `_process_mtlx()` warns when baked output is empty and on fallback to original
+  - `to_threejs_physical()` warns when no PBR properties are produced
+- 4 new regression tests for silent failure detection.
+
+# v1.0.2
+
+## Fixes
+
+- **Always bake MaterialX materials** — procedural materials without textures (e.g. GPUOpen "Brass") had their colors lost because baking was skipped. The baker is now always invoked, resolving procedural node graphs to scalar values.
+- **`extensionsUsed` set to `[]` instead of `None`** — fixes a pygltflib compatibility issue when saving GLB files without extensions.
+- 15 regression tests covering all prior fixes (1-bit textures, transmissive materials, name collisions, array padding, no-op texture transform, procedural baking).
+
 # v1.0.1
 
 ## Fixes
