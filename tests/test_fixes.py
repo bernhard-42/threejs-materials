@@ -290,6 +290,327 @@ class TestInjectMaterialsPadArray:
         result = GLTF2.load(str(path))
         assert len(result.materials) >= 2
 
+    def test_inject_into_gltf_ascii(self, tmp_path):
+        """inject_materials must work with .gltf files that have external .bin buffers."""
+        import struct
+        from pygltflib import (
+            GLTF2, Accessor, Attributes, Buffer, BufferView,
+            Mesh, Node, Primitive, Scene,
+        )
+        from pygltflib import Material as GltfMaterial
+
+        vertices = [0, 0, 0, 1, 0, 0, 0, 1, 0]
+        vbytes = struct.pack("<9f", *vertices)
+
+        gltf = GLTF2()
+        gltf.asset.generator = "test"
+        gltf.materials = [GltfMaterial(name="placeholder")]
+        # Write binary data to external .bin file
+        bin_path = tmp_path / "test.bin"
+        bin_path.write_bytes(vbytes)
+        gltf.buffers = [Buffer(byteLength=len(vbytes), uri="test.bin")]
+        gltf.bufferViews = [
+            BufferView(buffer=0, byteOffset=0, byteLength=len(vbytes)),
+        ]
+        gltf.accessors = [
+            Accessor(bufferView=0, componentType=5126, count=3, type="VEC3",
+                     min=[0, 0, 0], max=[1, 1, 0]),
+        ]
+        gltf.meshes = [
+            Mesh(primitives=[Primitive(attributes=Attributes(POSITION=0), material=0)]),
+        ]
+        gltf.nodes = [Node(mesh=0)]
+        gltf.scenes = [Scene(nodes=[0])]
+        gltf.scene = 0
+
+        gltf_path = str(tmp_path / "test.gltf")
+        gltf.save(gltf_path)
+
+        mat = _sample("test_mat", values={"color": [1, 0, 0]})
+        # Should not crash with "a bytes-like object is required, not 'NoneType'"
+        inject_materials(gltf_path, {0: mat})
+
+        result = GLTF2.load(gltf_path)
+        assert len(result.materials) >= 1
+        assert result.materials[0].name == "test_mat"
+
+
+# ---------------------------------------------------------------------------
+# Round-trip tests: inject_materials across .gltf/.glb formats
+#
+# Verify that materials survive: save → load → verify for all combinations
+# of input format (.gltf+.bin, .glb) and output format.
+# ---------------------------------------------------------------------------
+
+
+class TestInjectMaterialsRoundTrip:
+    """Round-trip tests for inject_materials across .gltf and .glb formats."""
+
+    @staticmethod
+    def _make_gltf_object():
+        """Build a GLTF2 object with 2 nodes, position + UV data, 1 placeholder material."""
+        import struct
+        from pygltflib import (
+            GLTF2, Accessor, Attributes, Buffer, BufferView,
+            Mesh, Node, Primitive, Scene,
+        )
+        from pygltflib import Material as GltfMaterial
+
+        # Triangle: 3 verts with positions and UVs
+        positions = [0, 0, 0, 10, 0, 0, 0, 10, 0]
+        uvs = [0, 0, 10, 0, 0, 10]
+        pos_bytes = struct.pack("<9f", *positions)
+        uv_bytes = struct.pack("<6f", *uvs)
+        blob = (pos_bytes + uv_bytes) * 2  # duplicate for 2 meshes
+
+        chunk = len(pos_bytes) + len(uv_bytes)
+
+        gltf = GLTF2()
+        gltf.asset.generator = "test"
+        gltf.materials = [GltfMaterial(name="placeholder")]
+        gltf.buffers = [Buffer(byteLength=len(blob))]
+        gltf.bufferViews = [
+            BufferView(buffer=0, byteOffset=0, byteLength=len(pos_bytes)),
+            BufferView(buffer=0, byteOffset=len(pos_bytes), byteLength=len(uv_bytes)),
+            BufferView(buffer=0, byteOffset=chunk, byteLength=len(pos_bytes)),
+            BufferView(buffer=0, byteOffset=chunk + len(pos_bytes), byteLength=len(uv_bytes)),
+        ]
+        gltf.accessors = [
+            Accessor(bufferView=0, componentType=5126, count=3, type="VEC3",
+                     min=[0, 0, 0], max=[10, 10, 0]),
+            Accessor(bufferView=1, componentType=5126, count=3, type="VEC2",
+                     min=[0, 0], max=[10, 10]),
+            Accessor(bufferView=2, componentType=5126, count=3, type="VEC3",
+                     min=[0, 0, 0], max=[10, 10, 0]),
+            Accessor(bufferView=3, componentType=5126, count=3, type="VEC2",
+                     min=[0, 0], max=[10, 10]),
+        ]
+        gltf.meshes = [
+            Mesh(primitives=[Primitive(
+                attributes=Attributes(POSITION=0, TEXCOORD_0=1), material=0)]),
+            Mesh(primitives=[Primitive(
+                attributes=Attributes(POSITION=2, TEXCOORD_0=3), material=0)]),
+        ]
+        gltf.nodes = [Node(children=[1, 2]), Node(mesh=0), Node(mesh=1)]
+        gltf.scenes = [Scene(nodes=[0])]
+        gltf.scene = 0
+
+        return gltf, blob
+
+    def _save_as_gltf(self, gltf, blob, tmp_path):
+        """Save as .gltf + .bin pair."""
+        bin_path = tmp_path / "test.bin"
+        bin_path.write_bytes(blob)
+        gltf.buffers[0].uri = "test.bin"
+        path = str(tmp_path / "test.gltf")
+        gltf.save(path)
+        return path
+
+    def _save_as_glb(self, gltf, blob, tmp_path):
+        """Save as .glb."""
+        gltf.set_binary_blob(blob)
+        gltf.buffers[0].uri = None
+        path = str(tmp_path / "test.glb")
+        gltf.save_binary(path)
+        return path
+
+    def _make_materials(self):
+        """Create two distinct test materials with values and textures.
+
+        Returns (mat_red, mat_green, expected_hashes) where expected_hashes
+        maps texture name → sha256 hex digest of the source PNG bytes.
+        Color and normal textures should survive the round-trip byte-identical.
+        """
+        import hashlib
+
+        color_tex = _b64_png(200, 100, 50)
+        normal_tex = _b64_png(128, 128, 255)
+        rough_tex = _b64_png(180, 180, 180)
+
+        def _hash_data_uri(uri):
+            b64 = uri.split(",", 1)[1]
+            return hashlib.sha256(base64.b64decode(b64)).hexdigest()
+
+        expected = {
+            "color": _hash_data_uri(color_tex),
+            "normal": _hash_data_uri(normal_tex),
+        }
+
+        mat_red = _sample(
+            "red_metal",
+            values={"color": [0.8, 0.1, 0.1], "metalness": 1.0, "roughness": 1.0},
+            textures={"roughness": rough_tex, "normal": normal_tex},
+        )
+        mat_red.normalize_uvs = False
+
+        mat_green = _sample(
+            "green_plastic",
+            values={"color": [1.0, 1.0, 1.0], "metalness": 0.0, "roughness": 1.0, "ior": 1.45},
+            textures={"color": color_tex, "roughness": rough_tex, "normal": normal_tex},
+        )
+        mat_green.normalize_uvs = False
+        return mat_red, mat_green, expected
+
+    def _verify_result(self, path, expected_hashes):
+        """Load the file and verify both materials survived the round-trip."""
+        import hashlib
+        from pygltflib import GLTF2, ImageFormat
+
+        result = GLTF2.load(path)
+
+        # Convert file-referenced images to data URIs for uniform access
+        if any(img.uri and not img.uri.startswith("data:") for img in (result.images or [])):
+            result.convert_images(ImageFormat.DATAURI)
+
+        assert len(result.materials) >= 2, f"Expected >=2 materials, got {len(result.materials)}"
+
+        names = [m.name for m in result.materials]
+        assert "red_metal" in names, f"'red_metal' not in {names}"
+        assert "green_plastic" in names, f"'green_plastic' not in {names}"
+
+        red = next(m for m in result.materials if m.name == "red_metal")
+        green = next(m for m in result.materials if m.name == "green_plastic")
+
+        # --- Red metal: values ---
+        assert red.pbrMetallicRoughness.baseColorFactor[:3] == pytest.approx([0.8, 0.1, 0.1], abs=0.01)
+        assert red.pbrMetallicRoughness.metallicFactor == pytest.approx(1.0)
+        assert red.pbrMetallicRoughness.roughnessFactor == pytest.approx(1.0)
+
+        # --- Red metal: textures ---
+        assert red.pbrMetallicRoughness.metallicRoughnessTexture is not None, \
+            "red_metal should have a metallicRoughnessTexture (packed from roughness)"
+        assert red.normalTexture is not None, "red_metal should have a normalTexture"
+
+        # --- Green plastic: values ---
+        assert green.pbrMetallicRoughness.metallicFactor == pytest.approx(0.0)
+        assert green.pbrMetallicRoughness.roughnessFactor == pytest.approx(1.0)
+        assert "KHR_materials_ior" in (green.extensions or {})
+        assert green.extensions["KHR_materials_ior"]["ior"] == pytest.approx(1.45)
+
+        # --- Green plastic: textures ---
+        assert green.pbrMetallicRoughness.baseColorTexture is not None, \
+            "green_plastic should have a baseColorTexture"
+        assert green.pbrMetallicRoughness.metallicRoughnessTexture is not None, \
+            "green_plastic should have a metallicRoughnessTexture (packed from roughness)"
+        assert green.normalTexture is not None, "green_plastic should have a normalTexture"
+
+        # --- Image count ---
+        assert len(result.images) >= 3, \
+            f"Expected >=3 images (color, MR, normal), got {len(result.images)}"
+
+        # --- Verify texture image data integrity via hash ---
+        def _img_hash(tex_info):
+            """Get sha256 of the image bytes referenced by a TextureInfo."""
+            if tex_info is None:
+                return None
+            tex_idx = tex_info.index
+            src = result.textures[tex_idx].source
+            img = result.images[src]
+            if img.uri and img.uri.startswith("data:"):
+                raw = base64.b64decode(img.uri.split(",", 1)[1])
+            elif img.bufferView is not None:
+                bv = result.bufferViews[img.bufferView]
+                blob = result.binary_blob()
+                offset = bv.byteOffset or 0
+                raw = blob[offset:offset + bv.byteLength]
+            else:
+                return None
+            return hashlib.sha256(raw).hexdigest()
+
+        # Normal texture: used by both materials, should match original
+        red_normal_hash = _img_hash(red.normalTexture)
+        green_normal_hash = _img_hash(green.normalTexture)
+        assert red_normal_hash == expected_hashes["normal"], \
+            f"red_metal normal texture hash mismatch"
+        assert green_normal_hash == expected_hashes["normal"], \
+            f"green_plastic normal texture hash mismatch"
+
+        # Color texture on green: should match original
+        green_color_hash = _img_hash(green.pbrMetallicRoughness.baseColorTexture)
+        assert green_color_hash == expected_hashes["color"], \
+            f"green_plastic color texture hash mismatch"
+
+        # MR texture: packed from roughness + metalness scalar. Can't compare
+        # against source bytes (packing creates new PNG), but verify the image
+        # data is present and non-empty.
+        red_mr_hash = _img_hash(red.pbrMetallicRoughness.metallicRoughnessTexture)
+        green_mr_hash = _img_hash(green.pbrMetallicRoughness.metallicRoughnessTexture)
+        assert red_mr_hash is not None, "red_metal MR texture data missing after round-trip"
+        assert green_mr_hash is not None, "green_plastic MR texture data missing after round-trip"
+
+        # --- Meshes should point to different materials ---
+        mat_indices = {result.meshes[i].primitives[0].material for i in range(2)}
+        assert len(mat_indices) == 2, f"Both meshes point to same material: {mat_indices}"
+
+    def test_gltf_to_gltf(self, tmp_path):
+        """Load .gltf+.bin → inject → save .gltf+.bin → reload and verify."""
+        gltf, blob = self._make_gltf_object()
+        path = self._save_as_gltf(gltf, blob, tmp_path)
+
+        mat_red, mat_green, expected_hashes = self._make_materials()
+        inject_materials(path, {1: mat_red, 2: mat_green})
+
+        self._verify_result(path, expected_hashes)
+
+    def test_gltf_to_glb(self, tmp_path):
+        """Load .gltf+.bin → inject → save as .glb → reload and verify."""
+        gltf, blob = self._make_gltf_object()
+        gltf_path = self._save_as_gltf(gltf, blob, tmp_path)
+
+        mat_red, mat_green, expected_hashes = self._make_materials()
+
+        # Inject saves back to gltf_path (.gltf), then we convert to .glb
+        inject_materials(gltf_path, {1: mat_red, 2: mat_green})
+
+        # Load the injected .gltf and re-save as .glb
+        from pygltflib import GLTF2
+        injected = GLTF2.load(gltf_path)
+        # Load the .bin into memory for GLB
+        bin_path = tmp_path / "test.bin"
+        if bin_path.exists():
+            injected.set_binary_blob(bin_path.read_bytes())
+            injected.buffers[0].uri = None
+        glb_path = str(tmp_path / "output.glb")
+        injected.save_binary(glb_path)
+
+        self._verify_result(glb_path, expected_hashes)
+
+    def test_glb_to_glb(self, tmp_path):
+        """Load .glb → inject → save .glb → reload and verify."""
+        gltf, blob = self._make_gltf_object()
+        path = self._save_as_glb(gltf, blob, tmp_path)
+
+        mat_red, mat_green, expected_hashes = self._make_materials()
+        inject_materials(path, {1: mat_red, 2: mat_green})
+
+        self._verify_result(path, expected_hashes)
+
+    def test_glb_to_gltf(self, tmp_path):
+        """Load .glb → inject → save as .gltf+.bin → reload and verify."""
+        gltf, blob = self._make_gltf_object()
+        glb_path = self._save_as_glb(gltf, blob, tmp_path)
+
+        mat_red, mat_green, expected_hashes = self._make_materials()
+
+        # Inject saves back as .glb, then we convert to .gltf
+        inject_materials(glb_path, {1: mat_red, 2: mat_green})
+
+        # Load the injected .glb and re-save as .gltf
+        from pygltflib import GLTF2, ImageFormat
+        injected = GLTF2.load(glb_path)
+        gltf_path = str(tmp_path / "output.gltf")
+        # Extract images to files for .gltf format
+        if injected.images:
+            tex_dir = tmp_path / "output"
+            tex_dir.mkdir(exist_ok=True)
+            injected.convert_images(ImageFormat.FILE, path=str(tex_dir), override=True)
+            for img in injected.images:
+                if img.uri and not img.uri.startswith("data:"):
+                    img.uri = "output/" + img.uri
+        injected.save(gltf_path)
+
+        self._verify_result(gltf_path, expected_hashes)
+
 
 # ---------------------------------------------------------------------------
 # Fix: always bake procedural MaterialX materials (uncommitted)

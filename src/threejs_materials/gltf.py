@@ -769,6 +769,16 @@ def inject_materials(
     is_binary = target_path.endswith(".glb")
     gltf = GLTF2.load(target_path)
 
+    # For .gltf files, load external .bin buffer into memory so
+    # _read_accessor/_write_accessor can work uniformly.
+    _external_bin_path: Path | None = None
+    if not is_binary and gltf.binary_blob() is None and gltf.buffers:
+        buf_uri = gltf.buffers[0].uri
+        if buf_uri and not buf_uri.startswith("data:"):
+            _external_bin_path = Path(target_path).parent / buf_uri
+            if _external_bin_path.exists():
+                gltf.set_binary_blob(_external_bin_path.read_bytes())
+
     # Normalize values, converting GLTF2 objects on the fly.
     _gltf_cache: dict[int, Material] = {}
     resolved: dict[int, Material] = {}
@@ -943,6 +953,15 @@ def inject_materials(
     if is_binary:
         gltf.save_binary(target_path)
     else:
+        # For .gltf: write modified binary data back to external .bin file
+        # and restore the buffer URI before saving the JSON.
+        if _external_bin_path is not None:
+            blob = gltf.binary_blob()
+            if blob:
+                _external_bin_path.write_bytes(blob)
+                gltf.buffers[0].byteLength = len(blob)
+            gltf.destroy_binary_blob()
+            gltf.buffers[0].uri = _external_bin_path.name
         gltf.save(target_path)
 
 
