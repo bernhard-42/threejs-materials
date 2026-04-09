@@ -1,3 +1,10 @@
+# v1.0.4
+
+## Fixes
+
+- **`inject_materials` crash on `.gltf` files** — `.gltf` files store binary data in a separate `.bin` file, so `binary_blob()` returns `None`. Now loads the external buffer into memory for processing, writes modified data back to `.bin`, and restores the buffer URI before saving.
+- 5 new regression tests: `.gltf` ASCII injection + 4 round-trip tests (gltf→gltf, gltf→glb, glb→glb, glb→gltf) verifying values, extensions, and texture image hashes (SHA-256) survive all format combinations.
+
 # v1.0.3
 
 ## Fixes
