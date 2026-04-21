@@ -409,6 +409,8 @@ class _GltfBuilder:
             cc_rough = val("clearcoatRoughness")
             if cc_rough is not None:
                 ext["clearcoatRoughnessFactor"] = cc_rough
+            if ref := self._tex_ref(tex_info("clearcoatRoughness")):
+                ext["clearcoatRoughnessTexture"] = ref
             cc_uri = tex_uri("clearcoatNormal")
             if cc_uri is not None:
                 ext["clearcoatNormalTexture"] = {
@@ -430,6 +432,8 @@ class _GltfBuilder:
             sheen_rough = val("sheenRoughness")
             if sheen_rough is not None:
                 ext["sheenRoughnessFactor"] = sheen_rough
+            if ref := self._tex_ref(tex_info("sheenRoughness")):
+                ext["sheenRoughnessTexture"] = ref
             extensions["KHR_materials_sheen"] = ext
 
         # Iridescence
@@ -454,6 +458,8 @@ class _GltfBuilder:
             aniso_rot = val("anisotropyRotation")
             if aniso_rot is not None:
                 ext["anisotropyRotation"] = aniso_rot
+            if ref := self._tex_ref(tex_info("anisotropy")):
+                ext["anisotropyTexture"] = ref
             extensions["KHR_materials_anisotropy"] = ext
 
         # Specular
@@ -1165,6 +1171,7 @@ def _from_gltf(
         tex_from_ext("clearcoat", ext.get("clearcoatTexture"))
         if "clearcoatRoughnessFactor" in ext:
             val("clearcoatRoughness", ext["clearcoatRoughnessFactor"])
+        tex_from_ext("clearcoatRoughness", ext.get("clearcoatRoughnessTexture"))
         tex_from_ext("clearcoatNormal", ext.get("clearcoatNormalTexture"))
 
         ext = exts.get("KHR_materials_sheen", {})
@@ -1174,6 +1181,7 @@ def _from_gltf(
         tex_from_ext("sheenColor", ext.get("sheenColorTexture"))
         if "sheenRoughnessFactor" in ext:
             val("sheenRoughness", ext["sheenRoughnessFactor"])
+        tex_from_ext("sheenRoughness", ext.get("sheenRoughnessTexture"))
 
         ext = exts.get("KHR_materials_iridescence", {})
         if "iridescenceFactor" in ext:
@@ -1191,6 +1199,7 @@ def _from_gltf(
             val("anisotropy", ext["anisotropyStrength"])
         if "anisotropyRotation" in ext:
             val("anisotropyRotation", ext["anisotropyRotation"])
+        tex_from_ext("anisotropy", ext.get("anisotropyTexture"))
 
         ext = exts.get("KHR_materials_specular", {})
         if "specularFactor" in ext:

@@ -224,6 +224,42 @@ class TestFromGltf:
         imported = next(iter(PbrProperties.from_gltf(g).values()))
         assert imported.values.emissive_intensity == pytest.approx(2.0)
 
+    def test_clearcoat_roughness_texture(self):
+        tex = _b64_png(120, 60, 30)
+        mat = _sample(
+            values={"clearcoat": 0.8, "clearcoatRoughness": 0.2},
+            textures={"clearcoat_roughness": tex},
+        )
+        g = mat.to_gltf()
+        cc = g.materials[0].extensions["KHR_materials_clearcoat"]
+        assert "clearcoatRoughnessTexture" in cc
+        imported = next(iter(PbrProperties.from_gltf(g).values()))
+        assert imported.maps.clearcoat_roughness == tex
+
+    def test_sheen_roughness_texture(self):
+        tex = _b64_png(80, 40, 20)
+        mat = _sample(
+            values={"sheen": 1.0, "sheenRoughness": 0.3},
+            textures={"sheen_roughness": tex},
+        )
+        g = mat.to_gltf()
+        sh = g.materials[0].extensions["KHR_materials_sheen"]
+        assert "sheenRoughnessTexture" in sh
+        imported = next(iter(PbrProperties.from_gltf(g).values()))
+        assert imported.maps.sheen_roughness == tex
+
+    def test_anisotropy_texture(self):
+        tex = _b64_png(200, 100, 50)
+        mat = _sample(
+            values={"anisotropy": 0.5, "anisotropyRotation": 1.57},
+            textures={"anisotropy": tex},
+        )
+        g = mat.to_gltf()
+        an = g.materials[0].extensions["KHR_materials_anisotropy"]
+        assert "anisotropyTexture" in an
+        imported = next(iter(PbrProperties.from_gltf(g).values()))
+        assert imported.maps.anisotropy == tex
+
     def test_texture_repeat_restored(self):
         tex = _b64_png()
         mat = _sample(textures={"color": tex}).scale(2, 2)

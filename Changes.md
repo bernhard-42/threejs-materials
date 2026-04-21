@@ -1,3 +1,14 @@
+# v1.0.5
+
+## Fixes
+
+- **Three glTF textures now round-trip losslessly** — `clearcoatRoughnessTexture`, `sheenRoughnessTexture`, and `anisotropyTexture` are now written to `KHR_materials_clearcoat`, `KHR_materials_sheen`, and `KHR_materials_anisotropy` on export and restored on import. Previously the corresponding `PbrMaps` fields (`clearcoat_roughness`, `sheen_roughness`, `anisotropy`) were accepted by `library.py` but silently dropped by `to_gltf()` / `from_gltf()`.
+- 3 new round-trip regression tests, one per texture slot.
+
+## Docs
+
+- README Three.js output table now lists `clearcoatRoughnessMap`, `sheenRoughnessMap`, and `anisotropyMap` (previously shown as unsupported).
+
 # v1.0.4
 
 ## Fixes
