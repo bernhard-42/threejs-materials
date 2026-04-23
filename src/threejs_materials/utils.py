@@ -174,20 +174,51 @@ def _srgb_to_linear(c: float) -> float:
     return ((c + 0.055) / 1.055) ** 2.4
 
 
-def _average_texture_linear(
-    ref: str, texture_dir: Path | None = None
+def _linear_average_texture(
+    ref: str | None = None,
+    texture_dir: Path | None = None,
+    texture: bytes | None = None,
+    as_linear_srgb: bool = True,
 ) -> tuple[float, float, float]:
     """Return the average color of a texture in linear RGB."""
-    img = _open_texture_image(ref, texture_dir).convert("RGB")
+    if texture is not None:
+        if isinstance(texture, str) and texture.startswith("data:"):
+            # split off header like "image/png;base64,"
+            _, b64data = texture.split(",", 1)
+            img_bytes = base64.b64decode(b64data)
+            img = PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
+        else:
+            img = PILImage.open(io.BytesIO(texture)).convert("RGB")
+    elif ref is not None and texture_dir is not None:
+        img = _open_texture_image(ref, texture_dir).convert("RGB")
+    else:
+        raise TypeError("Either texture or ref, texture_dir need to be set")
+
     avg = img.resize((1, 1), PILImage.Resampling.LANCZOS).getpixel((0, 0))
-    r, g, b = (_srgb_to_linear(c / 255.0) for c in avg[:3])  # type: ignore[misc]
-    return (r, g, b)
+    if as_linear_srgb:
+        return [_srgb_to_linear(c / 255.0) for c in avg[:3]]  # type: ignore[misc]
+    else:
+        return [c / 255.0 for c in avg[:3]]  # type: ignore[misc]
+
+
+def linear_average_texture(
+    texture: bytes, as_linear_srgb: bool = True
+) -> tuple[float, float, float]:
+    return _linear_average_texture(texture=texture, as_linear_srgb=as_linear_srgb)
 
 
 def _parse_color_string(color: str) -> tuple[float, float, float]:
     """Parse a CSS color name or hex string to linear RGB (0-1).
 
     Supports ``#rgb``, ``#rrggbb``, and CSS named colors (same set as Three.js).
+
+    When ``as_linear`` is True (default), the bytes are gamma-decoded from
+    sRGB to linear — correct for Three.js ``MeshPhysicalMaterial.color`` and
+    any PBR channel the renderer expects in linear space.
+
+    When ``as_linear`` is False, the bytes are returned as raw ``value/255``
+    ratios with no gamma curve applied — suitable for display-space uses
+    where no linearization should happen.
     """
     r, g, b = ImageColor.getrgb(color)[:3]
     return (

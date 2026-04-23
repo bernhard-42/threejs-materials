@@ -3,6 +3,7 @@ from threejs_materials.gltf import collect_gltf_textures, inject_materials
 from threejs_materials.library import PbrProperties
 from threejs_materials.models import PbrMaps, PbrValues
 from threejs_materials.sources import clear_cache, list_cache
+from threejs_materials.utils import texture_average_color
 
 __all__ = [
     "PbrProperties",
@@ -13,4 +14,5 @@ __all__ = [
     "inject_materials",
     "list_cache",
     "clear_cache",
+    "texture_average_color",
 ]

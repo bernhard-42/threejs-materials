@@ -505,18 +505,28 @@ class PbrProperties:
     # -------------------------------------------------------------------
 
     def interpolate_color(self) -> tuple[float, float, float, float]:
-        """Estimate a representative sRGB color + alpha for CAD mode display."""
+        """Estimate a representative sRGB color + alpha for CAD mode display.
+
+        When a color texture is present, the texture's linear-space average
+        is used directly — without multiplying by ``values.color``. The
+        scalar is physically correct for Three.js rendering (where it
+        multiplies into the albedo), but this method returns the
+        perceptually-representative preview color after the viewer's tone
+        mapping and IBL. Including the scalar makes the preview noticeably
+        darker than the on-screen render.
+        """
         color_val = self.values.color
         color_tex = self.maps.color
 
         if isinstance(color_val, str):
             r, g, b = _parse_color_string(color_val)
         elif color_tex is not None:
-            tr, tg, tb = _average_texture_linear(color_tex, self.maps_dir)
-            if isinstance(color_val, list):
-                r, g, b = color_val[0] * tr, color_val[1] * tg, color_val[2] * tb
+            if self.maps_dir is not None:
+                r, g, b = _linear_average_texture(
+                    ref=color_tex, texture_dir=self.maps_dir
+                )
             else:
-                r, g, b = tr, tg, tb
+                r, g, b = _linear_average_texture(texture=color_tex)
         elif isinstance(color_val, list):
             r, g, b = color_val[:3]
         else:
