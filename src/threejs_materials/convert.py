@@ -421,6 +421,10 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         val("ior", p.get("specular_IOR", 1.5))
 
         transmission = p.get("transmission", 0.0)
+        if has_tex("transmission"):
+            # Procedural transmission: baker bakes the scalar into the
+            # texture, so the effective scalar is the neutral multiplier 1.0.
+            transmission = 1.0
         if transmission > 0.0:
             val("transmission", transmission)
             tex("transmission", "transmission")
@@ -434,6 +438,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         # incompatible and no scalar remap produces correct results.
 
         coat = p.get("coat", 0.0)
+        if has_tex("coat"):
+            coat = 1.0
         if coat > 0.0:
             val("clearcoat", coat)
             tex("clearcoat", "coat")
@@ -441,6 +447,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             tex("clearcoatNormal", "coat_normal")
 
         sheen = p.get("sheen", 0.0)
+        if has_tex("sheen_color"):
+            sheen = 1.0
         if sheen > 0.0:
             val("sheen", sheen)
             val("sheenColor", p.get("sheen_color", [1.0, 1.0, 1.0]))
@@ -493,6 +501,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         val("ior", p.get("ior", 1.5))
 
         transmission = p.get("transmission", 0.0)
+        if has_tex("transmission"):
+            transmission = 1.0
         val("transmission", transmission)
         tex("transmission", "transmission")
         if transmission > 0.0:
@@ -503,6 +513,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             if att_dist and att_dist > 0.0:
                 val("attenuationDistance", att_dist)
             thickness = p.get("thickness")
+            if has_tex("thickness"):
+                thickness = 1.0
             if thickness and thickness > 0.0:
                 val("thickness", thickness)
             tex("thickness", "thickness")
@@ -536,17 +548,31 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             val("anisotropyRotation", p.get("anisotropy_rotation", 0.0))
 
         clearcoat = p.get("clearcoat", 0.0)
+        if has_tex("clearcoat"):
+            clearcoat = 1.0
         if clearcoat > 0.0:
             val("clearcoat", clearcoat)
             tex("clearcoat", "clearcoat")
             val("clearcoatRoughness", p.get("clearcoat_roughness", 0.0))
             tex("clearcoatNormal", "clearcoat_normal")
 
+        # gltf_pbr has no separate `sheen` weight input; KHR_materials_sheen
+        # activates the layer whenever sheenColorFactor != [0,0,0]. We infer
+        # sheen=1.0 and gate the block on any sheen-related signal.
         sheen_color = p.get("sheen_color")
-        if sheen_color:
-            val("sheenColor", sheen_color)
+        has_sheen_color_tex = has_tex("sheen_color")
+        has_sheen_roughness_tex = has_tex("sheen_roughness")
+        if sheen_color or has_sheen_color_tex or has_sheen_roughness_tex:
+            val(
+                "sheenColor",
+                [1.0, 1.0, 1.0] if has_sheen_color_tex else (sheen_color or [1.0, 1.0, 1.0]),
+            )
             tex("sheenColor", "sheen_color")
-            val("sheenRoughness", p.get("sheen_roughness", 0.0))
+            val(
+                "sheenRoughness",
+                1.0 if has_sheen_roughness_tex else p.get("sheen_roughness", 0.0),
+            )
+            tex("sheenRoughness", "sheen_roughness")
             val("sheen", 1.0)
 
         emissive = p.get("emissive", [0.0, 0.0, 0.0])
@@ -570,6 +596,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
 
         # glTF iridescence (KHR_materials_iridescence)
         iridescence = p.get("iridescence", 0.0)
+        if has_tex("iridescence"):
+            iridescence = 1.0
         if iridescence > 0.0:
             val("iridescence", iridescence)
             tex("iridescence", "iridescence")
@@ -613,6 +641,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         val("ior", p.get("specular_ior", 1.5))
 
         transmission = p.get("transmission_weight", 0.0)
+        if has_tex("transmission_weight"):
+            transmission = 1.0
         if transmission > 0.0:
             val("transmission", transmission)
             tex("transmission", "transmission_weight")
@@ -633,6 +663,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         # Same structural mismatch as standard_surface — see comment above.
 
         coat = p.get("coat_weight", 0.0)
+        if has_tex("coat_weight"):
+            coat = 1.0
         if coat > 0.0:
             val("clearcoat", coat)
             tex("clearcoat", "coat_weight")
@@ -641,6 +673,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
 
         # OpenPBR fuzz → Three.js sheen
         fuzz = p.get("fuzz_weight", 0.0)
+        if has_tex("fuzz_color"):
+            fuzz = 1.0
         if fuzz > 0.0:
             val("sheen", fuzz)
             val("sheenColor", p.get("fuzz_color", [1.0, 1.0, 1.0]))
@@ -673,6 +707,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             val("side", 2)  # THREE.DoubleSide
 
         tf_weight = p.get("thin_film_weight", 0.0)
+        if has_tex("thin_film_weight"):
+            tf_weight = 1.0
         if tf_weight > 0.0:
             val("iridescence", tf_weight)
             tex("iridescence", "thin_film_weight")
