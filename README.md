@@ -20,7 +20,7 @@ Supported input formats:
 </tr>
 </table>
 
-## Migration from v0.x to v1.0.0
+## Migration from v0.x to v1.X
 
 v1.0.0 is a **breaking change**. The `Material` class has been replaced by typed dataclasses. See [Migration details](#migration-details) for a full guide.
 
@@ -85,7 +85,7 @@ Workflow
    brass = materials["Brushed brass"]  # access by material name
    ```
 
-That gives you a clean, portable material workflow: procedural inside Blender, baked to textures for export. Both .gltf  and  .glb  are supported, and texture file paths are typically resolved automatically during export.
+That gives you a clean, portable material workflow: procedural inside Blender, baked to textures for export. Both .gltf and .glb are supported, and texture file paths are typically resolved automatically during export.
 
 #### Format mapping glTF → internal
 
@@ -158,26 +158,26 @@ To force re-conversion, clear the cache with `clear_cache(name=...)` or delete t
 
 Supported models: `standard_surface`, `gltf_pbr`, `open_pbr_surface`. Other models produce empty output with a logged warning.
 
-| Feature          | standard_surface                        | gltf_pbr                 | open_pbr_surface         |
-| ---------------- | --------------------------------------- | ------------------------ | ------------------------ |
-| Base color       | Yes                                     | Yes                      | Yes                      |
-| Metalness        | Yes                                     | Yes                      | Yes                      |
-| Roughness        | Yes                                     | Yes                      | Yes                      |
-| Normal map       | Yes                                     | Yes                      | Yes                      |
-| Specular         | Yes (weight, color, IOR)                | Yes (weight, color, IOR) | Yes (weight, color, IOR) |
-| Transmission     | Yes                                     | Yes (+ attenuation)      | Yes (+ attenuation)      |
-| Emission         | Yes                                     | Yes                      | Yes                      |
-| Clearcoat        | Yes                                     | Yes                      | Yes                      |
-| Clearcoat normal | Yes                                     | Yes                      | Yes                      |
-| Sheen            | Yes                                     | Yes                      | Yes (fuzz)               |
-| Iridescence      | Yes                                     | Yes                      | Yes                      |
-| Anisotropy       | No (see note)                           | Yes                      | No (see note)            |
-| Opacity          | Yes                                     | Yes (alpha/alpha_mode)   | Yes (geometry_opacity)   |
-| Displacement     | Yes (model-independent)                 | Yes                      | Yes                      |
-| Dispersion       | No                                      | Yes                      | Yes                      |
-| Normal scale     | No (baked into texture)                 | Yes                      | No (baked into texture)  |
-| Thin-walled      | No                                      | No                       | Yes (→ DoubleSide)       |
-| Subsurface       | No                                      | No                       | No                       |
+| Feature          | standard_surface         | gltf_pbr                 | open_pbr_surface         |
+| ---------------- | ------------------------ | ------------------------ | ------------------------ |
+| Base color       | Yes                      | Yes                      | Yes                      |
+| Metalness        | Yes                      | Yes                      | Yes                      |
+| Roughness        | Yes                      | Yes                      | Yes                      |
+| Normal map       | Yes                      | Yes                      | Yes                      |
+| Specular         | Yes (weight, color, IOR) | Yes (weight, color, IOR) | Yes (weight, color, IOR) |
+| Transmission     | Yes                      | Yes (+ attenuation)      | Yes (+ attenuation)      |
+| Emission         | Yes                      | Yes                      | Yes                      |
+| Clearcoat        | Yes                      | Yes                      | Yes                      |
+| Clearcoat normal | Yes                      | Yes                      | Yes                      |
+| Sheen            | Yes                      | Yes                      | Yes (fuzz)               |
+| Iridescence      | Yes                      | Yes                      | Yes                      |
+| Anisotropy       | No (see note)            | Yes                      | No (see note)            |
+| Opacity          | Yes                      | Yes (alpha/alpha_mode)   | Yes (geometry_opacity)   |
+| Displacement     | Yes (model-independent)  | Yes                      | Yes                      |
+| Dispersion       | No                       | Yes                      | Yes                      |
+| Normal scale     | No (baked into texture)  | Yes                      | No (baked into texture)  |
+| Thin-walled      | No                       | No                       | Yes (→ DoubleSide)       |
+| Subsurface       | No                       | No                       | No                       |
 
 Subsurface scattering is not mapped — Three.js `MeshPhysicalMaterial` has no SSS support.
 
@@ -479,7 +479,7 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 
 - `material.override(**props) -> PbrProperties`
 
-  Return a new `PbrProperties` with value overrides. The original material is not modified.
+  Return a new `PbrProperties` with value overrides. The original material is not modified. All fields on `PbrValues` are accepted as kwargs.
 
   ```python
   from threejs_materials import PbrProperties
@@ -501,6 +501,24 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
   ```
 
   `scale(u, v)` sets `texture_repeat = (1/u, 1/v)` internally. In Three.js this maps to `texture.repeat`, in glTF it is exported as `KHR_texture_transform` with `scale: [1/u, 1/v]`. Can be chained with `override()`: `mat.override(color=(1,0,0)).scale(2, 2)`.
+
+#### Variant ids
+
+Both `override()` and `scale()` produce a distinct `id` on the returned material so variants don't silently collide when keyed into a dict:
+
+```python
+mat = PbrProperties.from_gpuopen("Car Paint")
+# mat.id == "Car Paint"
+
+red = mat.override(color=(1, 0, 0))
+# red.id == "Car Paint_a3f2e4b1"         ← hashed suffix
+# red.name == "Car Paint"                 ← display name unchanged
+
+chained = red.override(roughness=0.1)
+# chained.id == "Car Paint_e5f6g7h8"      ← fresh hash (not appended)
+```
+
+The hash is the first 8 hex chars of `blake2b((parent_id, kwargs))`, deterministic across Python sessions. Same call with same kwargs on the same parent produces the same id — so `mat.override(color=(1,0,0))` and a second call with identical args are `==` by id, enabling idempotent caching and `{m.id: m for m in mats}` dict construction without collisions. Chained calls cascade the parent id into the hash, so different chains are distinguishable even if their final state happens to coincide.
 
 ### Texture scaling
 
@@ -606,10 +624,10 @@ The `normalize_uvs` flag is serialized in `to_dict()` as `"normalizeUvs": false`
   wood = PbrProperties.from_gpuopen("Ivory Walnut Solid Wood")
   materials = {"wood": wood}      # keep for full PBR rendering
   object.material = "wood"
-  object.color = wood.interpolate_color()   # (0.53, 0.31, 0.18, 1.0)
+  object.color = wood.interpolate_color()   # (r, g, b, a) sRGB preview
   ```
 
-  When the material has a color texture, the texture is decoded and averaged (requires `Pillow`). Scalar colors (linear RGB) are converted to sRGB. Transmission and opacity are mapped to the alpha channel so glass-like materials appear semi-transparent.
+  When the material has a color texture, the texture is decoded and its average is used directly (requires `Pillow`); the scalar `values.color` is ignored in that case — it represents a physically-linear multiplier whose pre-tone-mapping effect makes the preview darker than the on-screen render. When no texture is present, `values.color` (linear RGB) is converted to sRGB. Transmission and opacity are mapped to the alpha channel so glass-like materials appear semi-transparent.
 
 - `encode_texture_base64(file_path) -> str`
 
@@ -732,30 +750,30 @@ The `export_gltf` function in build123d automatically detects PBR materials on s
 
 ### API changes
 
-| v0.x | v1.0.0 |
-|------|--------|
-| `Material(data_dict)` | `PbrProperties.from_dict(data_dict)` |
-| `Material.gpuopen.load("Car Paint")` | `PbrProperties.from_gpuopen("Car Paint")` |
-| `Material.ambientcg.load("Onyx015")` | `PbrProperties.from_ambientcg("Onyx015")` |
-| `Material.polyhaven.load("plank")` | `PbrProperties.from_polyhaven("plank")` |
-| `Material.physicallybased.load("Gold")` | `PbrProperties.from_physicallybased("Gold")` |
-| `Material.from_gltf(gltf)` | `PbrProperties.from_gltf(gltf)` |
-| `Material.load_gltf("file.glb")` | `PbrProperties.load_gltf("file.glb")` |
-| `Material.from_mtlx("file.mtlx")` | `PbrProperties.from_mtlx("file.mtlx")` |
-| `Material.list_sources()` | `from threejs_materials.sources import list_sources` |
-| `Material.list_cache()` | `from threejs_materials import list_cache` |
-| `Material.clear_cache()` | `from threejs_materials import clear_cache` |
+| v0.x                                    | v1.0.0                                               |
+| --------------------------------------- | ---------------------------------------------------- |
+| `Material(data_dict)`                   | `PbrProperties.from_dict(data_dict)`                 |
+| `Material.gpuopen.load("Car Paint")`    | `PbrProperties.from_gpuopen("Car Paint")`            |
+| `Material.ambientcg.load("Onyx015")`    | `PbrProperties.from_ambientcg("Onyx015")`            |
+| `Material.polyhaven.load("plank")`      | `PbrProperties.from_polyhaven("plank")`              |
+| `Material.physicallybased.load("Gold")` | `PbrProperties.from_physicallybased("Gold")`         |
+| `Material.from_gltf(gltf)`              | `PbrProperties.from_gltf(gltf)`                      |
+| `Material.load_gltf("file.glb")`        | `PbrProperties.load_gltf("file.glb")`                |
+| `Material.from_mtlx("file.mtlx")`       | `PbrProperties.from_mtlx("file.mtlx")`               |
+| `Material.list_sources()`               | `from threejs_materials.sources import list_sources` |
+| `Material.list_cache()`                 | `from threejs_materials import list_cache`           |
+| `Material.clear_cache()`                | `from threejs_materials import clear_cache`          |
 
 ### Data model changes
 
 The `properties` dict has been replaced by two typed dataclasses:
 
-| v0.x | v1.0.0 |
-|------|--------|
-| `mat.properties["color"]["value"]` | `mat.values.color` |
-| `mat.properties["color"]["texture"]` | `mat.maps.color` |
-| `mat.properties["normalScale"]["value"]` | `mat.values.normal_scale` |
-| `mat.properties["sheenColor"]["value"]` | `mat.values.sheen_color` |
+| v0.x                                           | v1.0.0                          |
+| ---------------------------------------------- | ------------------------------- |
+| `mat.properties["color"]["value"]`             | `mat.values.color`              |
+| `mat.properties["color"]["texture"]`           | `mat.maps.color`                |
+| `mat.properties["normalScale"]["value"]`       | `mat.values.normal_scale`       |
+| `mat.properties["sheenColor"]["value"]`        | `mat.values.sheen_color`        |
 | `mat.properties["specularIntensity"]["value"]` | `mat.values.specular_intensity` |
 
 - **`PbrValues`** holds scalar values with snake_case field names
@@ -783,12 +801,3 @@ The cache format changed from `"properties"` to `"values"` + `"textures"`. After
 from threejs_materials import clear_cache
 clear_cache()
 ```
-
-### New in v1.0.0
-
-- `PbrProperties.from_gpuopen()`, `from_ambientcg()`, `from_polyhaven()`, `from_physicallybased()` classmethods with full IDE tab completion
-- `PbrProperties.create()` for building materials from explicit values and texture paths
-- `normalize_uvs` flag for UV mode control (see [Texture scaling](#texture-scaling))
-- `scale(u, v, fixed=True/False)` — `fixed=True` (default) normalizes UVs for size-independent texture density
-- `list_cache()` prints grouped summary by default, `list_cache(as_json=True)` for tuples
-- `clear_cache()` prints success messages

@@ -1,13 +1,42 @@
-# v1.0.5
+# v1.1.0
+
+## Features
+
+- **`PbrProperties.from_pymat()`** — new factory that converts a Three.js-style PBR dict (with keys like `map`, `normalMap`, `roughnessMap`, `color_hex`) into a `PbrProperties`. Complements the existing `from_gltf`, `from_mtlx`, and `from_dict` factories.
+- **Full `override()` kwargs parity with `PbrValues`** — `override()` now accepts every scalar/color field on `PbrValues`. Previously missing: `transparent`, `alpha_test`, `specular_color`, `iridescence_ior`, `iridescence_thickness_range`, `dispersion`, `normal_scale`, `displacement_scale`, `side`.
+- **`_parse_color_string(color, as_linear=True)`** — utility gained an `as_linear` flag. Default `True` preserves the sRGB→linear decoding used for Three.js `color`; `False` returns raw `byte/255` ratios for display-space uses.
+
+## Behavior changes
+
+- **`override()` and `scale()` produce hashed variant ids** — the returned material carries `id = f"{name}_{hash}"` where `hash = blake2b((parent_id, kwargs))[:8]`. Same kwargs on the same parent → same id (deterministic across Python sessions); chained calls cascade the parent id into the hash so different chains stay distinguishable. Fixes the silent-collision bug where `{m.id: m for m in [mat, mat.override(color=red)]}` collapsed to one entry, losing the variant. The `name` (display) field is preserved unchanged.
+- **`PbrProperties.create()` rewritten as pure passthrough** — every kwarg now defaults to `None` and is emitted to `PbrValues` / `PbrMaps` only when the caller explicitly provides it. No auto-defaults, no map-aware neutral multipliers, no silent `values.color = [0.8, 0.8, 0.8]` style substitutions. Fields left unset get Three.js/glTF's own defaults at render time.
+- **`interpolate_color()` ignores `values.color` when a color texture is present** — the scalar is physically correct for Three.js rendering (multiplies into the texture), but including it in the preview produces a pre-tone-mapping color visibly darker than the on-screen render. The texture's linear-space average is now used directly.
+- **Opacity textures now auto-enable masking** — whenever an opacity texture survives conversion, `alphaTest=0.5` is emitted so Three.js actually respects the `alphaMap` (otherwise the material silently renders fully opaque). Chose pure MASK over BLEND to avoid depth-sort bleed-through on closed shapes like spheres.
+- **`iridescenceThicknessRange` emitted as `[X, X]`** (was `[0, X]`) across all three shader models. Matches MaterialX's single-scalar `thin_film_thickness` / `iridescence_thickness` semantics; the former `0` minimum was an invented value with no spec grounding.
 
 ## Fixes
 
 - **Three glTF textures now round-trip losslessly** — `clearcoatRoughnessTexture`, `sheenRoughnessTexture`, and `anisotropyTexture` are now written to `KHR_materials_clearcoat`, `KHR_materials_sheen`, and `KHR_materials_anisotropy` on export and restored on import. Previously the corresponding `PbrMaps` fields (`clearcoat_roughness`, `sheen_roughness`, `anisotropy`) were accepted by `library.py` but silently dropped by `to_gltf()` / `from_gltf()`.
-- 3 new round-trip regression tests, one per texture slot.
+- **ambientCG PNG → JPG fallback** — when `{asset}_{res}-PNG.zip` returns 404, the loader now automatically falls back to `{asset}_{res}-JPG.zip`. ambientCG has begun shipping JPG-only packages for some materials.
+- **Procedural feature inputs no longer silently dropped** — 11 sites across `standard_surface`, `gltf_pbr`, and `open_pbr_surface` where a feature (transmission, clearcoat, sheen, emission, iridescence, thickness, …) was gated on `scalar > 0`. When the author wired the scalar through a procedural graph, the baker put the result in `textures` (leaving `params[scalar] == 0`), the gate failed, and both the scalar and the texture were silently dropped. Each gate now also checks `has_tex(primary_texture)` and promotes the scalar to the neutral multiplier.
+- **MaterialX TextureBaker IOR recovery** — MaterialX 1.39.x TextureBaker does not preserve graph-connected scalar shader inputs; it rewrites them to a placeholder `value="1"`. This silently broke 6 GPUOpen materials (Old Paint + the Marble family) whose `specular_IOR` is wired through a constant-valued nodegraph, producing `ior=1.0` in the cache instead of the authored 1.39–1.80. A narrowly-scoped pre-bake walker now evaluates `constant | dot | convert` chains for `specular_IOR` / `coat_IOR` / `thin_film_IOR` and restores the author's value over the baker's clobbered one.
+- **`open_pbr_surface.geometry_opacity` texture** — ambientCG Smear 005 (and similar decals) wired their opacity mask to `geometry_opacity`, but `convert.py` only read the scalar and silently dropped the texture. Now emitted as `maps.opacity` with `alphaTest=0.5`.
+- **`gltf_pbr.sheen_roughness` texture** — baked sheen_roughness graphs were dropped on the gltf_pbr path. Now wired through with the scalar promoted to `1.0` when the texture is present.
+
+## Internals / refactor
+
+- **`gltf_pbr` sheen block** — stylistic rewrite for pattern consistency with clearcoat/transmission/iridescence blocks. Same behavior, explicit "texture → neutral multiplier" written the same way throughout. Comment clarifies why `gltf_pbr` hardcodes `sheen=1.0` (no independent weight input in the glTF shader).
+
+## Tests
+
+- ~40 new tests added across `test_convert.py`, `test_library.py`, and `tests/test_sources_ambientcg.py` covering every fix and behavior change above. Full suite: 257 passing.
 
 ## Docs
 
 - README Three.js output table now lists `clearcoatRoughnessMap`, `sheenRoughnessMap`, and `anisotropyMap` (previously shown as unsupported).
+- README Customization section gains a **Variant ids** subsection documenting the `{name}_{hash}` pattern on `override()` / `scale()`.
+- README `interpolate_color()` entry explains the new texture-only behavior (scalar ignored when texture is present, with reason).
+- README "New in v1.0.0" `create()` bullet expanded to note the pure-passthrough semantics.
 
 # v1.0.4
 
