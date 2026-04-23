@@ -35,6 +35,22 @@ from threejs_materials.utils import (
 log = logging.getLogger(__name__)
 
 
+def _hash_override(parent_id: str, overrides: dict) -> str:
+    """Compute a stable 8-hex-char fingerprint for an override call.
+
+    The hash input is ``(parent_id, overrides)`` so chained overrides
+    naturally cascade: the resulting id is unique across the chain history
+    even when the same override kwargs are applied at different points in
+    a chain. Deterministic across Python sessions (unlike ``hash()``).
+    """
+    payload = json.dumps(
+        [parent_id, sorted(overrides.items())],
+        sort_keys=True,
+        default=list,
+    ).encode()
+    return hashlib.blake2b(payload, digest_size=4).hexdigest()
+
+
 def _dump_nested(obj, lines, indent=2):
     """Recursively format a nested dict/list for dump output."""
     prefix = " " * indent
@@ -422,6 +438,8 @@ class PbrProperties:
         ior=None,
         transmission=None,
         opacity=None,
+        transparent=None,
+        alpha_test=None,
         clearcoat=None,
         clearcoat_roughness=None,
         sheen=None,
@@ -430,28 +448,53 @@ class PbrProperties:
         anisotropy=None,
         anisotropy_rotation=None,
         specular_intensity=None,
+        specular_color=None,
         emissive=None,
         emissive_intensity=None,
         attenuation_color=None,
         attenuation_distance=None,
         thickness=None,
         iridescence=None,
+        iridescence_ior=None,
+        iridescence_thickness_range=None,
+        dispersion=None,
+        normal_scale=None,
+        displacement_scale=None,
+        side=None,
     ) -> PbrProperties:
         """Return a new PbrProperties with value overrides."""
         overrides = {
             k: v
             for k, v in {
-                "color": color, "roughness": roughness, "metalness": metalness,
-                "ior": ior, "transmission": transmission, "opacity": opacity,
-                "clearcoat": clearcoat, "clearcoat_roughness": clearcoat_roughness,
-                "sheen": sheen, "sheen_color": sheen_color,
-                "sheen_roughness": sheen_roughness, "anisotropy": anisotropy,
+                "color": color,
+                "roughness": roughness,
+                "metalness": metalness,
+                "ior": ior,
+                "transmission": transmission,
+                "opacity": opacity,
+                "transparent": transparent,
+                "alpha_test": alpha_test,
+                "clearcoat": clearcoat,
+                "clearcoat_roughness": clearcoat_roughness,
+                "sheen": sheen,
+                "sheen_color": sheen_color,
+                "sheen_roughness": sheen_roughness,
+                "anisotropy": anisotropy,
                 "anisotropy_rotation": anisotropy_rotation,
                 "specular_intensity": specular_intensity,
-                "emissive": emissive, "emissive_intensity": emissive_intensity,
+                "specular_color": specular_color,
+                "emissive": emissive,
+                "emissive_intensity": emissive_intensity,
                 "attenuation_color": attenuation_color,
                 "attenuation_distance": attenuation_distance,
-                "thickness": thickness, "iridescence": iridescence,
+                "thickness": thickness,
+                "iridescence": iridescence,
+                "iridescence_ior": iridescence_ior,
+                "iridescence_thickness_range": iridescence_thickness_range,
+                "dispersion": dispersion,
+                "normal_scale": normal_scale,
+                "displacement_scale": displacement_scale,
+                "side": side,
             }.items()
             if v is not None
         }
@@ -468,11 +511,25 @@ class PbrProperties:
                     stacklevel=2,
                 )
             setattr(new_values, key, value)
+        # Unique variant id = "<name>_<8-hex>".  The hash input includes
+        # the parent id, so chained overrides cascade into distinct hashes
+        # without the suffix accumulating.  A no-op override (no kwargs
+        # passed) leaves the id untouched.
+        new_id = (
+            f"{self.name}_{_hash_override(self.id, overrides)}"
+            if overrides
+            else self.id
+        )
         return PbrProperties(
-            id=self.id, name=self.name, source=self.source,
-            url=self.url, license=self.license,
-            values=new_values, maps=new_maps,
-            texture_repeat=self.texture_repeat, normalize_uvs=self.normalize_uvs,
+            id=new_id,
+            name=self.name,
+            source=self.source,
+            url=self.url,
+            license=self.license,
+            values=new_values,
+            maps=new_maps,
+            texture_repeat=self.texture_repeat,
+            normalize_uvs=self.normalize_uvs,
             maps_dir=self.maps_dir,
         )
 
@@ -485,11 +542,18 @@ class PbrProperties:
         When ``fixed=False``, raw (non-normalized) UVs are used, so texture
         size depends on object geometry and matches glTF/glb export.
         """
+        scale_kwargs = {"u": u, "v": v, "fixed": fixed}
+        new_id = f"{self.name}_{_hash_override(self.id, scale_kwargs)}"
         return PbrProperties(
-            id=self.id, name=self.name, source=self.source,
-            url=self.url, license=self.license,
-            values=copy.deepcopy(self.values), maps=copy.deepcopy(self.maps),
-            texture_repeat=(1.0 / u, 1.0 / v), normalize_uvs=fixed,
+            id=new_id,
+            name=self.name,
+            source=self.source,
+            url=self.url,
+            license=self.license,
+            values=copy.deepcopy(self.values),
+            maps=copy.deepcopy(self.maps),
+            texture_repeat=(1.0 / u, 1.0 / v),
+            normalize_uvs=fixed,
             maps_dir=self.maps_dir,
         )
 
