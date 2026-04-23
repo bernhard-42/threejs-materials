@@ -225,6 +225,47 @@ class TestToThreejsPhysical:
         props = to_threejs_physical(mat, tmp_path)
         assert props["opacity"]["value"] == 0.5
         assert props["transparent"]["value"] is True
+        # Scalar-only opacity: no alphaTest (nothing to test against).
+        assert "alphaTest" not in props
+
+    def test_standard_surface_opacity_texture_promotes_alpha_test(
+        self, tmp_path, tiny_png,
+    ):
+        """ambientCG Smear regression: opacity texture alone must set
+        alphaTest=0.5 (MASK mode). transparent=True is deliberately NOT set —
+        it would disable depth writes and cause back-face bleed-through on
+        closed shapes."""
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        (tex_dir / "opacity.png").write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Smear001",
+            "shader_model": "standard_surface",
+            "params": {
+                "base": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+                # No scalar opacity — the MaterialX default is 1.0.
+            },
+            "textures": {"opacity": {"file": "textures/opacity.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "opacity" in props and "texture" in props["opacity"]
+        assert props["alphaTest"]["value"] == 0.5
+        assert "transparent" not in props
+
+    def test_standard_surface_no_opacity_signal(self, tmp_path):
+        """Plain opaque material must not emit transparent/alphaTest."""
+        mat = {
+            "name": "Test",
+            "shader_model": "standard_surface",
+            "params": {"base": 1.0, "base_color": [1.0, 1.0, 1.0]},
+            "textures": {},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "transparent" not in props
+        assert "alphaTest" not in props
+        assert "opacity" not in props
 
     def test_standard_surface_transmission(self, tmp_path):
         mat = {
@@ -774,6 +815,25 @@ class TestGltfPbrAlpha:
         assert props["opacity"]["value"] == 0.5
         assert props["transparent"]["value"] is True
 
+    def test_alpha_blend_mode_texture_only(self, tmp_path, tiny_png):
+        """BLEND + alpha texture with scalar=1.0: transparent must still be
+        set, otherwise Three.js ignores the alpha texture entirely."""
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        (tex_dir / "alpha.png").write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Test",
+            "shader_model": "gltf_pbr",
+            "params": {"alpha_mode": 2},  # BLEND, scalar defaults to 1.0
+            "textures": {"alpha": {"file": "textures/alpha.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["transparent"]["value"] is True
+        assert "opacity" in props and "texture" in props["opacity"]
+        # BLEND is an explicit author choice — don't force MASK.
+        assert "alphaTest" not in props
+
     def test_alpha_mask_mode(self, tmp_path):
         mat = {
             "name": "Test",
@@ -928,6 +988,31 @@ class TestOpenPbrGeometryOpacity:
         }
         props = to_threejs_physical(mat, tmp_path)
         assert "opacity" not in props
+        assert "transparent" not in props
+
+    def test_geometry_opacity_texture_promotes_alpha_test(
+        self, tmp_path, tiny_png,
+    ):
+        """ambientCG Smear005 regression: open_pbr_surface with a
+        geometry_opacity texture must emit opacity map + alphaTest=0.5.
+        transparent=True is deliberately NOT set (would disable depth writes
+        and cause back-face bleed-through on closed shapes)."""
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        (tex_dir / "opacity.png").write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "Smear005",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_color": [1.0, 1.0, 1.0],
+            },
+            "textures": {"geometry_opacity": {"file": "textures/opacity.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "opacity" in props and "texture" in props["opacity"]
+        assert props["alphaTest"]["value"] == 0.5
         assert "transparent" not in props
 
 
