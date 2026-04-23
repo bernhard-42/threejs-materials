@@ -14,12 +14,8 @@ log = logging.getLogger(__name__)
 LICENSE = "CC0 1.0"
 BROWSE_URL = "https://ambientcg.com/list?type=material"
 
-_RESOLUTION_MAP = {
-    "1K": "1K-PNG",
-    "2K": "2K-PNG",
-    "4K": "4K-PNG",
-    "8K": "8K-PNG",
-}
+_RESOLUTIONS = ("1K", "2K", "4K", "8K")
+_VARIANTS = ("PNG", "JPG")
 
 
 def material_url(name: str) -> str:
@@ -31,20 +27,38 @@ def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
 
     *name* is the assetId (e.g. ``"Onyx015"``).
     *resolution* is a normalized key: ``"1K"``, ``"2K"``, ``"4K"``, or ``"8K"``.
+
+    Prefers the PNG variant; falls back to JPG when the PNG package is 404.
     """
-    res = _RESOLUTION_MAP.get(resolution.upper())
-    if res is None:
+    res_u = resolution.upper()
+    if res_u not in _RESOLUTIONS:
         raise ValueError(
             f"Resolution '{resolution}' not available for ambientCG. "
-            f"Available: {list(_RESOLUTION_MAP)}"
+            f"Available: {list(_RESOLUTIONS)}"
         )
-    url = f"https://ambientCG.com/get?file={name}_{res}.zip"
-    log.info("Downloading ambientCG: %s", url)
-    resp = requests.get(url, timeout=120)
-    resp.raise_for_status()
+
+    content = None
+    last_err = None
+    for variant in _VARIANTS:
+        url = f"https://ambientCG.com/get?file={name}_{res_u}-{variant}.zip"
+        log.info("Downloading ambientCG: %s", url)
+        resp = requests.get(url, timeout=120)
+        if resp.status_code == 404:
+            last_err = f"{url} → 404"
+            log.info("ambientCG %s variant not found, trying next", variant)
+            continue
+        resp.raise_for_status()
+        content = resp.content
+        break
+
+    if content is None:
+        raise RuntimeError(
+            f"ambientCG: no package found for '{name}' at {res_u} "
+            f"(tried {list(_VARIANTS)}; last: {last_err})"
+        )
 
     mtlx_path = None
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
         for entry in zf.namelist():
             if entry.endswith(".mtlx"):
                 mtlx_path = out_dir / "material.mtlx"
