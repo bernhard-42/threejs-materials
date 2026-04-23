@@ -7,6 +7,8 @@ import MaterialX as mx
 import pytest
 
 from threejs_materials.convert import (
+    _evaluate_constant_scalar_graph,
+    _recover_baker_clobbered_iors,
     encode_texture_base64,
     extract_materials,
     parse_value,
@@ -1063,3 +1065,342 @@ class TestOpenPbrSheen:
         assert props["sheen"]["value"] == 0.6
         assert props["sheenColor"]["value"] == [0.9, 0.8, 0.7]
         assert props["sheenRoughness"]["value"] == 0.4
+
+
+# ---------------------------------------------------------------------------
+# Procedural feature inputs — baker wrote a texture, scalar param is absent.
+# Regression tests for the previous silent-drop behavior where a gated
+# feature with no constant scalar lost both the scalar AND the texture.
+# ---------------------------------------------------------------------------
+
+
+def _make_tex(tmp_path, tiny_png, name):
+    """Helper: place a tiny PNG in textures/ and return the mtlx-relative dict."""
+    tex_dir = tmp_path / "textures"
+    tex_dir.mkdir(exist_ok=True)
+    (tex_dir / f"{name}.png").write_bytes(tiny_png.read_bytes())
+    return {"file": f"textures/{name}.png"}
+
+
+class TestStandardSurfaceProceduralFeatures:
+    """standard_surface: procedural feature inputs must survive conversion."""
+
+    def test_procedural_transmission(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "standard_surface",
+            "params": {"base": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"transmission": _make_tex(tmp_path, tiny_png, "trans")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["transmission"]["value"] == 1.0
+        assert "texture" in props["transmission"]
+
+    def test_procedural_clearcoat(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "standard_surface",
+            "params": {"base": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"coat": _make_tex(tmp_path, tiny_png, "coat")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["clearcoat"]["value"] == 1.0
+        assert "texture" in props["clearcoat"]
+
+    def test_procedural_sheen_color(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "standard_surface",
+            "params": {"base": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"sheen_color": _make_tex(tmp_path, tiny_png, "sheen")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["sheen"]["value"] == 1.0
+        assert "texture" in props["sheenColor"]
+
+    def test_procedural_emission_color_without_weight_stays_off(
+        self, tmp_path, tiny_png,
+    ):
+        """Per MaterialX spec, standard_surface `emission` default is 0.0 →
+        no emission. A procedural `emission_color` alone must not force
+        emission on; the author's explicit scalar is required."""
+        mat = {
+            "name": "T", "shader_model": "standard_surface",
+            "params": {"base": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"emission_color": _make_tex(tmp_path, tiny_png, "em")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "emissive" not in props
+        assert "emissiveIntensity" not in props
+
+    def test_procedural_thin_film_weight_without_thickness_stays_off(
+        self, tmp_path, tiny_png,
+    ):
+        """Per MaterialX spec, standard_surface `thin_film_thickness`
+        default is 0.0 → no thin-film interference. Procedural
+        `thin_film_weight` alone must not invent a thickness."""
+        mat = {
+            "name": "T", "shader_model": "standard_surface",
+            "params": {"base": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"thin_film_weight": _make_tex(tmp_path, tiny_png, "tf")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "iridescence" not in props
+        assert "iridescenceThicknessRange" not in props
+
+
+class TestGltfPbrProceduralFeatures:
+    """gltf_pbr: procedural feature inputs must survive conversion."""
+
+    def test_procedural_transmission(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "gltf_pbr",
+            "params": {"base_color": [1, 1, 1]},
+            "textures": {"transmission": _make_tex(tmp_path, tiny_png, "trans")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["transmission"]["value"] == 1.0
+        assert "texture" in props["transmission"]
+
+    def test_procedural_thickness(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "gltf_pbr",
+            "params": {"base_color": [1, 1, 1], "transmission": 1.0},
+            "textures": {"thickness": _make_tex(tmp_path, tiny_png, "th")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["thickness"]["value"] == 1.0
+        assert "texture" in props["thickness"]
+
+    def test_procedural_clearcoat(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "gltf_pbr",
+            "params": {"base_color": [1, 1, 1]},
+            "textures": {"clearcoat": _make_tex(tmp_path, tiny_png, "cc")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["clearcoat"]["value"] == 1.0
+        assert "texture" in props["clearcoat"]
+
+    def test_procedural_sheen_color(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "gltf_pbr",
+            "params": {"base_color": [1, 1, 1]},
+            "textures": {"sheen_color": _make_tex(tmp_path, tiny_png, "sh")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["sheen"]["value"] == 1.0
+        assert props["sheenColor"]["value"] == [1.0, 1.0, 1.0]
+        assert "texture" in props["sheenColor"]
+
+    def test_procedural_sheen_roughness(self, tmp_path, tiny_png):
+        """sheen_roughness wired through the baker must survive conversion
+        as a sheenRoughness texture with the scalar promoted to neutral."""
+        mat = {
+            "name": "T", "shader_model": "gltf_pbr",
+            "params": {"base_color": [1, 1, 1]},
+            "textures": {
+                "sheen_roughness": _make_tex(tmp_path, tiny_png, "sr"),
+            },
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["sheen"]["value"] == 1.0
+        assert props["sheenRoughness"]["value"] == 1.0
+        assert "texture" in props["sheenRoughness"]
+
+    def test_procedural_iridescence(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "gltf_pbr",
+            "params": {"base_color": [1, 1, 1]},
+            "textures": {"iridescence": _make_tex(tmp_path, tiny_png, "ir")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["iridescence"]["value"] == 1.0
+        assert "texture" in props["iridescence"]
+
+    def test_procedural_emissive_without_factor_stays_off(
+        self, tmp_path, tiny_png,
+    ):
+        """Per glTF spec, emissiveFactor default is [0,0,0] → no emission.
+        A procedural `emissive` texture alone must not force emission on."""
+        mat = {
+            "name": "T", "shader_model": "gltf_pbr",
+            "params": {"base_color": [1, 1, 1]},
+            "textures": {"emissive": _make_tex(tmp_path, tiny_png, "em")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "emissive" not in props
+        assert "emissiveIntensity" not in props
+
+
+class TestOpenPbrProceduralFeatures:
+    """open_pbr_surface: procedural feature inputs must survive conversion."""
+
+    def test_procedural_transmission(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "open_pbr_surface",
+            "params": {"base_weight": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"transmission_weight": _make_tex(tmp_path, tiny_png, "tr")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["transmission"]["value"] == 1.0
+        assert "texture" in props["transmission"]
+
+    def test_procedural_coat(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "open_pbr_surface",
+            "params": {"base_weight": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"coat_weight": _make_tex(tmp_path, tiny_png, "cw")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["clearcoat"]["value"] == 1.0
+        assert "texture" in props["clearcoat"]
+
+    def test_procedural_fuzz(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "open_pbr_surface",
+            "params": {"base_weight": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"fuzz_color": _make_tex(tmp_path, tiny_png, "fz")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["sheen"]["value"] == 1.0
+        assert "texture" in props["sheenColor"]
+
+    def test_procedural_emission_color_without_luminance_stays_off(
+        self, tmp_path, tiny_png,
+    ):
+        """Per OpenPBR spec, `emission_luminance` default is 0 → no
+        emission. A procedural `emission_color` alone must not force
+        emission on."""
+        mat = {
+            "name": "T", "shader_model": "open_pbr_surface",
+            "params": {"base_weight": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"emission_color": _make_tex(tmp_path, tiny_png, "em")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert "emissive" not in props
+        assert "emissiveIntensity" not in props
+
+    def test_procedural_iridescence(self, tmp_path, tiny_png):
+        mat = {
+            "name": "T", "shader_model": "open_pbr_surface",
+            "params": {"base_weight": 1.0, "base_color": [1, 1, 1]},
+            "textures": {"thin_film_weight": _make_tex(tmp_path, tiny_png, "tf")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["iridescence"]["value"] == 1.0
+        assert "texture" in props["iridescence"]
+
+
+# ---------------------------------------------------------------------------
+# MaterialX TextureBaker workaround — scalar IOR recovery from constant graphs
+# ---------------------------------------------------------------------------
+
+
+def _build_ior_via_nodegraph_doc(ior_value: float = 1.39) -> mx.Document:
+    """Build a standard_surface material with specular_IOR wired through
+    a nodegraph containing a constant — the exact pattern GPUOpen uses for
+    Old Paint and the Marble family."""
+    doc = mx.createDocument()
+    ng = doc.addNodeGraph("NG_test")
+    const = ng.addNode("constant", "ior_const", "float")
+    const.addInput("value", "float").setValueString(str(ior_value))
+    dot = ng.addNode("dot", "ior_dot", "float")
+    dot.addInput("in", "float").setNodeName("ior_const")
+    ng.addOutput("ior_out", "float").setNodeName("ior_dot")
+
+    shader = doc.addNode("standard_surface", "test_shader", "surfaceshader")
+    ior_inp = shader.addInput("specular_IOR", "float")
+    ior_inp.setAttribute("nodegraph", "NG_test")
+    ior_inp.setAttribute("output", "ior_out")
+
+    mat = doc.addNode("surfacematerial", "test_mat", "material")
+    mat.addInput("surfaceshader", "surfaceshader").setNodeName("test_shader")
+    return doc
+
+
+class TestBakerIorWorkaround:
+    def test_evaluate_constant_direct(self):
+        """specular_IOR wired via dot → constant evaluates to the constant."""
+        doc = _build_ior_via_nodegraph_doc(1.39)
+        shader = next(iter(doc.getNodes("standard_surface")))
+        inp = shader.getInput("specular_IOR")
+        assert _evaluate_constant_scalar_graph(inp) == pytest.approx(1.39)
+
+    def test_evaluate_non_graph_returns_none(self):
+        """A direct-value scalar input (no graph) is out of scope — helper
+        returns None because there's no upstream node to walk."""
+        doc = mx.createDocument()
+        shader = doc.addNode("standard_surface", "s", "surfaceshader")
+        inp = shader.addInput("specular_IOR", "float")
+        inp.setValueString("1.5")
+        assert _evaluate_constant_scalar_graph(inp) is None
+
+    def test_evaluate_non_trivial_graph_returns_none(self):
+        """An unhandled node category (e.g., multiply) returns None so the
+        baker's value stays in place — conservative by design."""
+        doc = mx.createDocument()
+        ng = doc.addNodeGraph("NG_mul")
+        c1 = ng.addNode("constant", "c1", "float")
+        c1.addInput("value", "float").setValueString("1.5")
+        c2 = ng.addNode("constant", "c2", "float")
+        c2.addInput("value", "float").setValueString("2.0")
+        mul = ng.addNode("multiply", "m", "float")
+        mul.addInput("in1", "float").setNodeName("c1")
+        mul.addInput("in2", "float").setNodeName("c2")
+        ng.addOutput("out", "float").setNodeName("m")
+
+        shader = doc.addNode("standard_surface", "s", "surfaceshader")
+        inp = shader.addInput("specular_IOR", "float")
+        inp.setAttribute("nodegraph", "NG_mul")
+        inp.setAttribute("output", "out")
+        assert _evaluate_constant_scalar_graph(inp) is None
+
+    def test_recover_patches_params_in_place(self):
+        """End-to-end: _recover_baker_clobbered_iors overwrites a clobbered
+        IOR in the mats dict with the graph-evaluated value."""
+        doc = _build_ior_via_nodegraph_doc(1.39)
+        # Simulate the post-bake state: params carry the clobbered 1.0
+        mats = [{
+            "name": "test_mat",
+            "shader_model": "standard_surface",
+            "params": {"specular_IOR": 1.0},
+            "textures": {},
+        }]
+        _recover_baker_clobbered_iors(doc, mats)
+        assert mats[0]["params"]["specular_IOR"] == pytest.approx(1.39)
+
+    def test_recover_ignores_non_ior_inputs(self):
+        """The workaround is scoped to IOR-family inputs only; other
+        scalars wired through the same pattern are left alone (we have no
+        evidence they need the workaround, and intervening would risk
+        over-reach)."""
+        doc = mx.createDocument()
+        ng = doc.addNodeGraph("NG_spec")
+        c = ng.addNode("constant", "c", "float")
+        c.addInput("value", "float").setValueString("0.7")
+        ng.addOutput("out", "float").setNodeName("c")
+
+        shader = doc.addNode("standard_surface", "ss", "surfaceshader")
+        inp = shader.addInput("specular", "float")
+        inp.setAttribute("nodegraph", "NG_spec")
+        inp.setAttribute("output", "out")
+        mat = doc.addNode("surfacematerial", "m", "material")
+        mat.addInput("surfaceshader", "surfaceshader").setNodeName("ss")
+
+        mats = [{
+            "name": "m",
+            "shader_model": "standard_surface",
+            "params": {"specular": 1.0},  # hypothetical "clobbered" value
+            "textures": {},
+        }]
+        _recover_baker_clobbered_iors(doc, mats)
+        # Specular is NOT in the recovery list → param untouched
+        assert mats[0]["params"]["specular"] == 1.0
+
+    def test_recover_handles_missing_shader_nodes(self):
+        """Material node without a surface shader is skipped gracefully."""
+        doc = mx.createDocument()
+        # Material node with no shader connection
+        doc.addNode("surfacematerial", "lonely", "material")
+        mats = [{"name": "lonely", "shader_model": None,
+                 "params": {}, "textures": {}}]
+        _recover_baker_clobbered_iors(doc, mats)  # must not raise
+        assert mats[0]["params"] == {}
