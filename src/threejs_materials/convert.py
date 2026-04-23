@@ -471,9 +471,10 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             val("iridescence", 1.0)
             tex("iridescence", "thin_film_weight")
             val("iridescenceIOR", p.get("thin_film_IOR", 1.5))
-            # standard_surface thin_film_thickness is already in nm;
-            # Three.js iridescenceThicknessRange also expects nm.
-            val("iridescenceThicknessRange", [0.0, tf_thickness])
+            # MaterialX exposes a single `thin_film_thickness` scalar (nm);
+            # Three.js uses a [min, max] range. Emit the scalar as uniform
+            # thickness so no fictional min value is introduced.
+            val("iridescenceThicknessRange", [tf_thickness, tf_thickness])
 
         # Only apply opacity when transmission is not active
         # (transmission subsumes opacity; combining them causes double attenuation)
@@ -612,9 +613,12 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             val("iridescence", iridescence)
             tex("iridescence", "iridescence")
             val("iridescenceIOR", p.get("iridescence_ior", 1.3))
-            # iridescence_thickness is in nm; Three.js also expects nm
+            # MaterialX gltf_pbr exposes a single `iridescence_thickness`
+            # scalar in nm (default 100 per the MaterialX shader spec).
+            # Three.js uses a [min, max] range; emit the scalar as uniform
+            # thickness so no fictional min value is introduced.
             iri_thick = p.get("iridescence_thickness", 100.0)
-            val("iridescenceThicknessRange", [0.0, iri_thick])
+            val("iridescenceThicknessRange", [iri_thick, iri_thick])
 
         # glTF dispersion (KHR_materials_dispersion)
         dispersion = p.get("dispersion", 0.0)
@@ -727,9 +731,11 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             val("iridescence", tf_weight)
             tex("iridescence", "thin_film_weight")
             val("iridescenceIOR", p.get("thin_film_ior", 1.5))
-            # thin_film_thickness is in μm; Three.js expects nm
-            tf_thickness_um = p.get("thin_film_thickness", 0.5)
-            val("iridescenceThicknessRange", [0.0, tf_thickness_um * 1000.0])
+            # OpenPBR `thin_film_thickness` is in μm (default 0.5 per spec);
+            # Three.js expects nm.  Emit the scalar as uniform thickness so
+            # no fictional min value is introduced.
+            tf_thickness_nm = p.get("thin_film_thickness", 0.5) * 1000.0
+            val("iridescenceThicknessRange", [tf_thickness_nm, tf_thickness_nm])
 
     else:
         log.warning("Unsupported shader model '%s' — only displacement will be mapped", model)
