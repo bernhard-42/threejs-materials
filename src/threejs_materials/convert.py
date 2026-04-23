@@ -486,6 +486,12 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             if avg_opacity < 1.0:
                 val("opacity", avg_opacity)
                 val("transparent", True)
+            if has_tex("opacity"):
+                # Pure MASK mode for opacity textures: alphaTest alone gives
+                # crisp cutoff AND depth writes. Adding transparent=True here
+                # would disable depth writes and cause back-face bleed-through
+                # on closed shapes (spheres, etc.).
+                val("alphaTest", 0.5)
             tex("opacity", "opacity")
 
     elif model == "gltf_pbr":
@@ -588,6 +594,10 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             # BLEND mode → standard opacity
             if alpha < 1.0:
                 val("opacity", alpha)
+                val("transparent", True)
+            if has_tex("alpha"):
+                # Alpha texture under BLEND only works if transparent=True;
+                # without this flag Three.js ignores the alphaMap entirely.
                 val("transparent", True)
             tex("opacity", "alpha")
         elif alpha_mode == 1:
@@ -701,6 +711,10 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             if avg_opacity < 1.0:
                 val("opacity", avg_opacity)
                 val("transparent", True)
+            if has_tex("geometry_opacity"):
+                # Pure MASK mode — see standard_surface comment above.
+                val("alphaTest", 0.5)
+            tex("opacity", "geometry_opacity")
 
         # Thin-walled geometry → render both sides
         if p.get("geometry_thin_walled", False):
