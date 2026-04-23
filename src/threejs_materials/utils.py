@@ -201,7 +201,7 @@ def _linear_average_texture(
         return [c / 255.0 for c in avg[:3]]  # type: ignore[misc]
 
 
-def linear_average_texture(
+def texture_average_color(
     texture: bytes, as_linear_srgb: bool = True
 ) -> tuple[float, float, float]:
     return _linear_average_texture(texture=texture, as_linear_srgb=as_linear_srgb)
