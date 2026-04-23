@@ -229,38 +229,44 @@ class PbrProperties:
             baked_mtlx.unlink(missing_ok=True)
 
         name = mtlx_path.stem
-        return cls.from_dict({
-            "id": name,
-            "name": name,
-            "source": "local",
-            "url": "",
-            "license": "",
-            "properties": properties,
-            "maps_dir": str(tex_dir),
-        })
+        return cls.from_dict(
+            {
+                "id": name,
+                "name": name,
+                "source": "local",
+                "url": "",
+                "license": "",
+                "properties": properties,
+                "maps_dir": str(tex_dir),
+            }
+        )
 
     @classmethod
     def from_gpuopen(cls, name: str, resolution: str = "1K") -> PbrProperties:
         """Download, convert, and cache a GPUOpen material."""
         from threejs_materials.sources import _SOURCE_LOADERS
+
         return cls.from_dict(_SOURCE_LOADERS["gpuopen"].load(name, resolution))
 
     @classmethod
     def from_ambientcg(cls, name: str, resolution: str = "1K") -> PbrProperties:
         """Download, convert, and cache an ambientCG material."""
         from threejs_materials.sources import _SOURCE_LOADERS
+
         return cls.from_dict(_SOURCE_LOADERS["ambientcg"].load(name, resolution))
 
     @classmethod
     def from_polyhaven(cls, name: str, resolution: str = "1K") -> PbrProperties:
         """Download, convert, and cache a PolyHaven material."""
         from threejs_materials.sources import _SOURCE_LOADERS
+
         return cls.from_dict(_SOURCE_LOADERS["polyhaven"].load(name, resolution))
 
     @classmethod
     def from_physicallybased(cls, name: str, resolution: str = "1K") -> PbrProperties:
         """Download, convert, and cache a PhysicallyBased material."""
         from threejs_materials.sources import _SOURCE_LOADERS
+
         return cls.from_dict(_SOURCE_LOADERS["physicallybased"].load(name, resolution))
 
     @classmethod
@@ -571,9 +577,13 @@ class PbrProperties:
                 for k, v in textures_d.items()
             }
         d: dict[str, object] = {
-            "id": self.id, "name": self.name, "source": self.source,
-            "url": self.url, "license": self.license,
-            "values": values_d, "textures": textures_d,
+            "id": self.id,
+            "name": self.name,
+            "source": self.source,
+            "url": self.url,
+            "license": self.license,
+            "values": values_d,
+            "textures": textures_d,
         }
         if self.texture_repeat is not None:
             d["textureRepeat"] = list(self.texture_repeat)
