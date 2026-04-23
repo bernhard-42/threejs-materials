@@ -97,8 +97,8 @@ class PbrProperties:
             id=data["id"],
             name=data["name"],
             source=data["source"],
-            url=data["url"],
-            license=data["license"],
+            url=data.get("url", ""),
+            license=data.get("license", ""),
             values=PbrValues.from_dict(data.get("values", {})),
             maps=PbrMaps.from_dict(data.get("textures", {})),
             texture_repeat=data.get("texture_repeat"),
@@ -426,9 +426,17 @@ class PbrProperties:
                 raise ValueError("All texture files must be in the same directory")
             maps_dir = common
 
-        return cls(
-            id=id, name=id, source="custom", url="", license="",
-            values=values, maps=maps, maps_dir=maps_dir,
+        return cls.from_dict(
+            {
+                "id": id,
+                "name": id,
+                "source": "custom",
+                "url": "",
+                "license": "",
+                "values": values,
+                "textures": textures,
+                "maps_dir": str(maps_dir) if maps_dir is not None else None,
+            }
         )
 
     # -------------------------------------------------------------------
