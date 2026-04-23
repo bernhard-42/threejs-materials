@@ -28,7 +28,7 @@ from threejs_materials.utils import (
     _is_data_uri,
     _resolve_to_data_uri,
     _linear_to_srgb,
-    _average_texture_linear,
+    _linear_average_texture,
     _parse_color_string,
 )
 
