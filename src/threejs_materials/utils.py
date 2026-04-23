@@ -207,8 +207,10 @@ def texture_average_color(
     return _linear_average_texture(texture=texture, as_linear_srgb=as_linear_srgb)
 
 
-def _parse_color_string(color: str) -> tuple[float, float, float]:
-    """Parse a CSS color name or hex string to linear RGB (0-1).
+def _parse_color_string(
+    color: str, as_linear: bool = True
+) -> tuple[float, float, float]:
+    """Parse a CSS color name or hex string to an RGB tuple in [0, 1].
 
     Supports ``#rgb``, ``#rrggbb``, and CSS named colors (same set as Three.js).
 
@@ -221,8 +223,10 @@ def _parse_color_string(color: str) -> tuple[float, float, float]:
     where no linearization should happen.
     """
     r, g, b = ImageColor.getrgb(color)[:3]
-    return (
-        _srgb_to_linear(r / 255.0),
-        _srgb_to_linear(g / 255.0),
-        _srgb_to_linear(b / 255.0),
-    )
+    if as_linear:
+        return (
+            _srgb_to_linear(r / 255.0),
+            _srgb_to_linear(g / 255.0),
+            _srgb_to_linear(b / 255.0),
+        )
+    return (r / 255.0, g / 255.0, b / 255.0)
