@@ -91,6 +91,72 @@ class PbrProperties:
         )
 
     @classmethod
+    def from_pymat(
+        cls,
+        pbr: dict,
+        name: str = "Material",
+        id: str = "Material",
+        source: str = "unknown",
+        normalize_uvs: bool = True,
+        texture_scale: tuple[float, float] = (1, 1),
+    ) -> PbrProperties:
+        if texture_scale == 0:
+            raise ValueError("texture_scale needs to be > 0")
+
+        color = pbr.get("color")
+
+        if isinstance(color, int):
+            color = f"#{color:06x}"
+
+        if isinstance(color, str):
+            color = _parse_color_string(color, as_linear=False)
+
+        if pbr.get("map") is not None:
+            color = (1, 1, 1)
+
+        if pbr.get("roughnessMap") is not None:
+            roughness = 1.0
+        else:
+            roughness = pbr.get("roughness")
+
+        if pbr.get("metalnessMap") is not None:
+            metalness = 1.0
+        else:
+            metalness = pbr.get("metalness")
+
+        new_dict = {
+            "name": name,
+            "id": id,
+            "source": source,
+            "texture_repeat": [1 / s for s in texture_scale],
+            "normalize_uvs": normalize_uvs,
+            "values": {
+                "metalness": metalness,
+                "roughness": roughness,
+                "color": color,
+                "ior": pbr.get("ior"),
+                "transmission": pbr.get("transmission"),
+                "clearcoat": pbr.get("clearcoat"),
+                "emissive": pbr.get("emissive"),
+                "opacity": pbr.get("opacity"),
+                "dispersion": pbr.get("dispersion"),
+                "specular_color": pbr.get("specular_color"),
+                "specular_intensity": pbr.get("specular_intensity"),
+            },
+            "textures": {
+                "color": pbr.get("map"),
+                "normal": pbr.get("normalMap"),
+                "roughness": pbr.get("roughnessMap"),
+                "metalness": pbr.get("metalnessMap"),
+                "ao": pbr.get("aoMap"),
+                "displacement": pbr.get("displacementMap"),
+                "emissive": pbr.get("emissiveMap"),
+                "opacity": pbr.get("opacityMap"),
+            },
+        }
+        return cls.from_dict(new_dict)
+
+    @classmethod
     def from_gltf(
         cls,
         gltf: GLTF2,
