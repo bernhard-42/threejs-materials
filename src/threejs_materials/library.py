@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import warnings
@@ -274,32 +275,32 @@ class PbrProperties:
         cls,
         id: str,
         *,
-        color=(0.8, 0.8, 0.8),
-        metalness: float = 0.0,
-        roughness: float = 0.5,
-        ior: float = 1.5,
-        transmission: float = 0.0,
-        opacity: float = 1.0,
-        transparent: bool = False,
+        color=None,
+        metalness: float | None = None,
+        roughness: float | None = None,
+        ior: float | None = None,
+        transmission: float | None = None,
+        opacity: float | None = None,
+        transparent: bool | None = None,
         alpha_test: float | None = None,
         emissive: tuple | list | None = None,
         emissive_intensity: float | None = None,
-        clearcoat: float = 0.0,
-        clearcoat_roughness: float = 0.0,
-        sheen: float = 0.0,
+        clearcoat: float | None = None,
+        clearcoat_roughness: float | None = None,
+        sheen: float | None = None,
         sheen_color: tuple | list | None = None,
-        sheen_roughness: float = 0.0,
-        anisotropy: float = 0.0,
-        anisotropy_rotation: float = 0.0,
-        specular_intensity: float = 1.0,
+        sheen_roughness: float | None = None,
+        anisotropy: float | None = None,
+        anisotropy_rotation: float | None = None,
+        specular_intensity: float | None = None,
         specular_color: tuple | list | None = None,
         attenuation_color: tuple | list | None = None,
         attenuation_distance: float | None = None,
-        thickness: float = 0.0,
-        iridescence: float = 0.0,
-        iridescence_ior: float = 1.3,
+        thickness: float | None = None,
+        iridescence: float | None = None,
+        iridescence_ior: float | None = None,
         iridescence_thickness_range: tuple | list | None = None,
-        dispersion: float = 0.0,
+        dispersion: float | None = None,
         normal_scale: tuple | list | None = None,
         displacement_scale: float | None = None,
         side: int | None = None,
@@ -324,7 +325,19 @@ class PbrProperties:
         thickness_map: str | None = None,
         displacement_map: str | None = None,
     ) -> PbrProperties:
-        """Create PbrProperties from explicit PBR values and texture paths."""
+        """Create PbrProperties from explicit PBR values and texture paths.
+
+        This is a pure passthrough wrapper: every kwarg defaults to ``None``
+        and is emitted to the resulting ``PbrValues`` / ``PbrMaps`` only when
+        the caller explicitly provides it. No fallbacks, no auto-enables, no
+        silent multiplications. When both a scalar and its paired map are
+        provided, Three.js / glTF multiply them per spec.
+
+        If a caller needs Three.js's own defaults (e.g. white color when a
+        color_map is given without an explicit color), simply omit the
+        scalar — the value serializes as absent and Three.js uses its
+        built-in default at render time.
+        """
         texture_dirs: list[Path] = []
 
         def _resolve_texture(tex: str | None) -> str | None:
@@ -338,86 +351,95 @@ class PbrProperties:
                 return p.name
             raise FileNotFoundError(f"Texture file not found: {tex}")
 
-        if isinstance(color, str):
-            color_val = list(_parse_color_string(color))
-        else:
-            color_val = list(color)[:3]
-
-        values = PbrValues(
-            color=color_val, metalness=metalness, roughness=roughness, ior=ior,
-        )
-        if transmission > 0:
-            values.transmission = transmission
-        if opacity < 1.0:
-            values.opacity = opacity
-        if transparent:
-            values.transparent = True
+        values: dict = {}
+        if color is not None:
+            if isinstance(color, str):
+                values["color"] = list(_parse_color_string(color))
+            else:
+                values["color"] = list(color)[:3]
+        if metalness is not None:
+            values["metalness"] = metalness
+        if roughness is not None:
+            values["roughness"] = roughness
+        if ior is not None:
+            values["ior"] = ior
+        if transmission is not None:
+            values["transmission"] = transmission
+        if opacity is not None:
+            values["opacity"] = opacity
+        if transparent is not None:
+            values["transparent"] = transparent
         if alpha_test is not None:
-            values.alpha_test = alpha_test
+            values["alphaTest"] = alpha_test
         if emissive is not None:
-            values.emissive = list(emissive[:3])
+            values["emissive"] = list(emissive[:3])
         if emissive_intensity is not None:
-            values.emissive_intensity = emissive_intensity
-        if clearcoat > 0:
-            values.clearcoat = clearcoat
-            values.clearcoat_roughness = clearcoat_roughness
-        if sheen > 0:
-            values.sheen = sheen
-            if sheen_color is not None:
-                values.sheen_color = list(sheen_color[:3])
-            values.sheen_roughness = sheen_roughness
-        if anisotropy > 0:
-            values.anisotropy = anisotropy
-            values.anisotropy_rotation = anisotropy_rotation
-        if specular_intensity != 1.0:
-            values.specular_intensity = specular_intensity
+            values["emissiveIntensity"] = emissive_intensity
+        if clearcoat is not None:
+            values["clearcoat"] = clearcoat
+        if clearcoat_roughness is not None:
+            values["clearcoatRoughness"] = clearcoat_roughness
+        if sheen is not None:
+            values["sheen"] = sheen
+        if sheen_color is not None:
+            values["sheenColor"] = list(sheen_color[:3])
+        if sheen_roughness is not None:
+            values["sheenRoughness"] = sheen_roughness
+        if anisotropy is not None:
+            values["anisotropy"] = anisotropy
+        if anisotropy_rotation is not None:
+            values["anisotropyRotation"] = anisotropy_rotation
+        if specular_intensity is not None:
+            values["specularIntensity"] = specular_intensity
         if specular_color is not None:
-            values.specular_color = list(specular_color[:3])
+            values["specularColor"] = list(specular_color[:3])
         if attenuation_color is not None:
-            values.attenuation_color = list(attenuation_color[:3])
+            values["attenuationColor"] = list(attenuation_color[:3])
         if attenuation_distance is not None:
-            values.attenuation_distance = attenuation_distance
-        if thickness > 0:
-            values.thickness = thickness
-        if iridescence > 0:
-            values.iridescence = iridescence
-            values.iridescence_ior = iridescence_ior
-            if iridescence_thickness_range is not None:
-                values.iridescence_thickness_range = list(iridescence_thickness_range)
-        if dispersion > 0:
-            values.dispersion = dispersion
+            values["attenuationDistance"] = attenuation_distance
+        if thickness is not None:
+            values["thickness"] = thickness
+        if iridescence is not None:
+            values["iridescence"] = iridescence
+        if iridescence_ior is not None:
+            values["iridescenceIOR"] = iridescence_ior
+        if iridescence_thickness_range is not None:
+            values["iridescenceThicknessRange"] = list(iridescence_thickness_range)
+        if dispersion is not None:
+            values["dispersion"] = dispersion
         if normal_scale is not None:
-            values.normal_scale = list(normal_scale)
+            values["normalScale"] = list(normal_scale)
         if displacement_scale is not None:
-            values.displacement_scale = displacement_scale
+            values["displacementScale"] = displacement_scale
         if side is not None:
-            values.side = side
+            values["side"] = side
 
         tex_inputs = {
-            "color": color_map, "metalness": metalness_map,
-            "roughness": roughness_map, "normal": normal_map,
-            "emissive": emissive_map, "ao": ao_map, "opacity": opacity_map,
+            "color": color_map,
+            "metalness": metalness_map,
+            "roughness": roughness_map,
+            "normal": normal_map,
+            "emissive": emissive_map,
+            "ao": ao_map,
+            "opacity": opacity_map,
             "clearcoat": clearcoat_map,
             "clearcoat_roughness": clearcoat_roughness_map,
             "clearcoat_normal": clearcoat_normal_map,
-            "transmission": transmission_map, "sheen_color": sheen_color_map,
+            "transmission": transmission_map,
+            "sheen_color": sheen_color_map,
             "sheen_roughness": sheen_roughness_map,
-            "anisotropy": anisotropy_map, "iridescence": iridescence_map,
+            "anisotropy": anisotropy_map,
+            "iridescence": iridescence_map,
             "specular_intensity": specular_intensity_map,
             "specular_color": specular_color_map,
-            "thickness": thickness_map, "displacement": displacement_map,
+            "thickness": thickness_map,
+            "displacement": displacement_map,
         }
-        maps = PbrMaps()
+        textures: dict = {}
         for field_name, tex_path in tex_inputs.items():
             uri = _resolve_texture(tex_path)
             if uri:
-                setattr(maps, field_name, uri)
-                if field_name == "color":
-                    values.color = [1.0, 1.0, 1.0]
-                elif field_name == "metalness":
-                    values.metalness = 1.0
-                elif field_name == "roughness":
-                    values.roughness = 1.0
+                textures[field_name] = uri
 
         maps_dir = None
         if texture_dirs:

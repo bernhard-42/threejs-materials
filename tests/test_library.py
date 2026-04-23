@@ -152,6 +152,157 @@ class TestPbrProperties:
 
 
 # ---------------------------------------------------------------------------
+# PbrProperties.create
+# ---------------------------------------------------------------------------
+
+
+class TestCreate:
+    def test_no_args_produces_empty_material(self):
+        """create() is a passthrough — with no kwargs, no values are set.
+        Three.js/glTF applies its own defaults at render time."""
+        mat = PbrProperties.create(id="plain")
+        assert mat.values.color is None
+        assert mat.values.metalness is None
+        assert mat.values.roughness is None
+        assert mat.values.ior is None
+        assert mat.maps.color is None
+
+    def test_explicit_scalars_respected(self):
+        mat = PbrProperties.create(
+            id="t", color=(0.2, 0.4, 0.6), metalness=0.9, roughness=0.1,
+        )
+        assert mat.values.color == [0.2, 0.4, 0.6]
+        assert mat.values.metalness == 0.9
+        assert mat.values.roughness == 0.1
+
+    def test_map_only_leaves_scalar_unset(self, tmp_path, tiny_png):
+        """Passing a map without a scalar leaves the scalar unset (None).
+        Three.js will apply its own default at render time."""
+        png = tmp_path / "tex.png"
+        png.write_bytes(tiny_png.read_bytes())
+
+        mat = PbrProperties.create(
+            id="t",
+            color_map=str(png),
+            metalness_map=str(png),
+            roughness_map=str(png),
+        )
+        assert mat.values.color is None
+        assert mat.values.metalness is None
+        assert mat.values.roughness is None
+        assert mat.maps.color == "tex.png"
+        assert mat.maps.metalness == "tex.png"
+        assert mat.maps.roughness == "tex.png"
+
+    def test_scalar_plus_map_is_preserved(self, tmp_path, tiny_png):
+        """User-explicit scalar + map preserved verbatim — Three.js/glTF
+        multiplies them per spec."""
+        png = tmp_path / "tex.png"
+        png.write_bytes(tiny_png.read_bytes())
+
+        mat = PbrProperties.create(
+            id="t",
+            color=(0.3, 0.3, 0.3),
+            roughness=0.3,
+            metalness=0.5,
+            color_map=str(png),
+            roughness_map=str(png),
+            metalness_map=str(png),
+        )
+        assert mat.values.color == [0.3, 0.3, 0.3]
+        assert mat.values.roughness == 0.3
+        assert mat.values.metalness == 0.5
+
+    def test_feature_scalars_passthrough(self):
+        """Feature scalars are not gated — passing 0 explicitly emits 0,
+        passing non-zero emits that, omitting emits nothing."""
+        mat = PbrProperties.create(id="t")
+        assert mat.values.clearcoat is None
+        assert mat.values.sheen is None
+        assert mat.values.transmission is None
+        assert mat.values.iridescence is None
+        assert mat.values.dispersion is None
+        assert mat.values.thickness is None
+        assert mat.values.anisotropy is None
+
+        mat2 = PbrProperties.create(
+            id="t", clearcoat=0.8, clearcoat_roughness=0.2,
+            sheen=0.5, sheen_color=(1, 1, 1), sheen_roughness=0.3,
+            iridescence=1.0, iridescence_ior=1.3,
+            iridescence_thickness_range=(100, 400),
+            dispersion=0.4, transmission=0.7, thickness=0.1,
+        )
+        assert mat2.values.clearcoat == 0.8
+        assert mat2.values.clearcoat_roughness == 0.2
+        assert mat2.values.sheen == 0.5
+        assert mat2.values.sheen_color == [1, 1, 1]
+        assert mat2.values.iridescence == 1.0
+        assert mat2.values.dispersion == 0.4
+        assert mat2.values.transmission == 0.7
+        assert mat2.values.thickness == 0.1
+
+    def test_feature_map_without_scalar_is_silent(self, tmp_path, tiny_png):
+        """Passing only a feature-map without its enable-scalar is a no-op
+        in Three.js (the feature stays off). create() reflects the input
+        as-is — it does not auto-enable. Callers must set the scalar."""
+        png = tmp_path / "tex.png"
+        png.write_bytes(tiny_png.read_bytes())
+
+        mat = PbrProperties.create(id="t", clearcoat_map=str(png))
+        assert mat.values.clearcoat is None
+        assert mat.maps.clearcoat == "tex.png"
+
+    def test_color_string(self):
+        """Color strings are sRGB-decoded to linear (matching Three.js)."""
+        mat = PbrProperties.create(id="t", color="#ff0000")
+        assert mat.values.color == pytest.approx([1.0, 0.0, 0.0], abs=1e-3)
+
+    def test_from_dict_and_create_converge(self, tmp_path, tiny_png):
+        """Same inputs via either factory produce equivalent output."""
+        png = tmp_path / "tex.png"
+        png.write_bytes(tiny_png.read_bytes())
+
+        via_create = PbrProperties.create(
+            id="x",
+            color=(0.3, 0.3, 0.3), metalness=0.5, roughness=0.3,
+            color_map=str(png),
+        )
+        via_dict = PbrProperties.from_dict({
+            "id": "x", "name": "x", "source": "custom",
+            "url": "", "license": "",
+            "values": {
+                "color": [0.3, 0.3, 0.3],
+                "metalness": 0.5, "roughness": 0.3,
+            },
+            "textures": {"color": "tex.png"},
+            "maps_dir": str(tmp_path),
+        })
+        assert via_create.values.color == via_dict.values.color
+        assert via_create.values.metalness == via_dict.values.metalness
+        assert via_create.values.roughness == via_dict.values.roughness
+        assert via_create.maps.color == via_dict.maps.color
+
+    def test_texture_file_not_found(self):
+        with pytest.raises(FileNotFoundError, match="Texture file not found"):
+            PbrProperties.create(id="t", color_map="/nonexistent/tex.png")
+
+    def test_mixed_texture_dirs_rejected(self, tmp_path, tiny_png):
+        d1 = tmp_path / "a"
+        d2 = tmp_path / "b"
+        d1.mkdir()
+        d2.mkdir()
+        (d1 / "tex.png").write_bytes(tiny_png.read_bytes())
+        (d2 / "tex.png").write_bytes(tiny_png.read_bytes())
+
+        with pytest.raises(ValueError, match="same directory"):
+            PbrProperties.create(
+                id="t",
+                color_map=str(d1 / "tex.png"),
+                roughness_map=str(d2 / "tex.png"),
+            )
+
+
+# ---------------------------------------------------------------------------
 # PbrProperties.override
 # ---------------------------------------------------------------------------
 
