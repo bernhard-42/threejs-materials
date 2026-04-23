@@ -294,8 +294,9 @@ class TestToThreejsPhysical:
         props = to_threejs_physical(mat, tmp_path)
         assert props["iridescence"]["value"] == 1.0
         assert props["iridescenceIOR"]["value"] == 1.3
-        # standard_surface thin_film_thickness is already in nm; pass through directly
-        assert props["iridescenceThicknessRange"]["value"] == [0.0, 500.0]
+        # standard_surface thin_film_thickness is already in nm; MaterialX
+        # exposes a single scalar, so it's emitted as uniform thickness.
+        assert props["iridescenceThicknessRange"]["value"] == [500.0, 500.0]
 
     def test_gltf_pbr_basic(self, tmp_path):
         mat = {
@@ -484,7 +485,7 @@ class TestToThreejsPhysical:
         props = to_threejs_physical(mat, tmp_path)
         assert props["iridescence"]["value"] == 0.8
         assert props["iridescenceIOR"]["value"] == 1.4
-        assert props["iridescenceThicknessRange"]["value"] == [0.0, 400.0]
+        assert props["iridescenceThicknessRange"]["value"] == [400.0, 400.0]
 
     def test_open_pbr_surface_dispersion(self, tmp_path):
         mat = {
@@ -811,7 +812,7 @@ class TestGltfPbrIridescence:
         props = to_threejs_physical(mat, tmp_path)
         assert props["iridescence"]["value"] == 0.8
         assert props["iridescenceIOR"]["value"] == 1.4
-        assert props["iridescenceThicknessRange"]["value"] == [0.0, 300.0]
+        assert props["iridescenceThicknessRange"]["value"] == [300.0, 300.0]
 
 
 class TestGltfPbrDispersion:
