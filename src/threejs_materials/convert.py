@@ -187,6 +187,120 @@ def _extract_image_info(node) -> dict | None:
             if img:
                 return img
 
+
+# ---------------------------------------------------------------------------
+# MaterialX TextureBaker workaround — recover scalar IORs from constant graphs
+# ---------------------------------------------------------------------------
+# MaterialX 1.39.x TextureBaker does not preserve the values of scalar shader
+# inputs that are wired through a nodegraph to a constant node — it rewrites
+# the baked shader input to a placeholder ``value="1"`` instead of the
+# graph's evaluated constant. This silently breaks ~6 GPUOpen materials
+# (Old Paint + the Marble family) that expose ``specular_IOR`` through a
+# graph rather than as a direct value, producing ``ior=1.0``
+#
+# Workaround: before we trust the baker's params, walk each IOR-family input
+# on the ORIGINAL doc. If it reduces to a trivial constant (through the
+# node categories ``constant``, ``dot``, and ``convert``), we restore that
+# value over whatever the baker wrote. Scope is deliberately narrow — only
+# the three IOR inputs whose default semantics (refractive index ≥ 1) are
+# universal across MaterialX shader models.
+#
+# If this ever needs to cover more scalars or more complex graphs, graduate
+# to a general graph-walker; for today, the narrow patch closes every known
+# real failure and introduces no new policy for inputs that aren't affected.
+
+_IOR_INPUTS_TO_RECOVER: tuple[str, ...] = (
+    "specular_IOR", "coat_IOR", "thin_film_IOR",
+)
+
+
+def _evaluate_constant_scalar_graph(inp) -> float | None:
+    """Walk an input's upstream graph and return the constant scalar it
+    reduces to, or ``None`` if the graph isn't a trivial constant.
+
+    Handles the narrow pattern ``constant | dot | convert`` chains
+    terminating at a ``constant`` node — which is what GPUOpen's affected
+    materials use. Anything more elaborate returns ``None`` so the baker's
+    value is left in place.
+    """
+    mx = ensure_materialx()
+    connected = inp.getConnectedNode()
+    doc = inp.getDocument()
+
+    if connected is None and inp.hasNodeGraphString():
+        ng_name = inp.getNodeGraphString()
+        ng = doc.getNodeGraph(ng_name)
+        if ng:
+            out_attr = mx.Output.OUTPUT_ATTRIBUTE
+            out_name = (
+                inp.getAttribute(out_attr) if inp.hasAttribute(out_attr) else ""
+            )
+            if out_name:
+                out_port = ng.getOutput(out_name)
+            else:
+                outputs = ng.getOutputs()
+                out_port = outputs[0] if outputs else None
+            if out_port:
+                node_name = out_port.getNodeName()
+                if node_name:
+                    connected = ng.getNode(node_name)
+
+    visited: set[str] = set()
+    while connected is not None and connected.getName() not in visited:
+        visited.add(connected.getName())
+        cat = connected.getCategory()
+        if cat == "constant":
+            value_inp = connected.getInput("value")
+            if value_inp is None:
+                return None
+            val_str = value_inp.getValueString()
+            try:
+                return float(val_str) if val_str else None
+            except ValueError:
+                return None
+        if cat in ("dot", "convert"):
+            in_inp = connected.getInput("in")
+            if in_inp is None:
+                return None
+            val_str = in_inp.getValueString()
+            if val_str:
+                try:
+                    return float(val_str)
+                except ValueError:
+                    return None
+            connected = in_inp.getConnectedNode()
+            continue
+        return None
+    return None
+
+
+def _recover_baker_clobbered_iors(orig_doc, mats: list[dict]) -> None:
+    """MaterialX TextureBaker workaround — see module-level comment above.
+
+    For each material, walks ``specular_IOR`` / ``coat_IOR`` /
+    ``thin_film_IOR`` on the ORIGINAL doc. If the input reduces to a
+    constant via ``_evaluate_constant_scalar_graph``, overwrites the
+    corresponding entry in ``mats[i]['params']`` so the author's graph-wired
+    value survives baking.
+    """
+    mx = ensure_materialx()
+    mats_by_name = {m["name"]: m for m in mats}
+    for mat_node in orig_doc.getMaterialNodes():
+        target = mats_by_name.get(mat_node.getName())
+        if target is None:
+            continue
+        shader_nodes = mx.getShaderNodes(mat_node)
+        if not shader_nodes:
+            continue
+        shader = shader_nodes[0]
+        for inp in shader.getInputs():
+            inp_name = inp.getName()
+            if inp_name not in _IOR_INPUTS_TO_RECOVER:
+                continue
+            value = _evaluate_constant_scalar_graph(inp)
+            if value is not None:
+                target.setdefault("params", {})[inp_name] = value
+
     return None
 
 
@@ -743,6 +857,12 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None, Path]:
     if not mats:
         log.warning("Baking produced no materials for %s — falling back to original", mtlx_path.name)
         mats = orig_mats
+
+    # MaterialX TextureBaker workaround: restore scalar IORs the baker
+    # clobbers when they're wired through a constant-valued nodegraph.
+    # See _recover_baker_clobbered_iors for the full context.
+    if mats and mats is not orig_mats:
+        _recover_baker_clobbered_iors(doc, mats)
 
     # Merge textures the baker missed from the original.
     # The baker sometimes collapses a texture to a single sampled
