@@ -228,6 +228,237 @@ class TestOverride:
         assert new.values.color == [0.5, 0.0, 0.0]
         assert new.maps.color is None
 
+    def test_override_all_pbr_value_fields(self):
+        """Every field in PbrValues should be overridable via override().
+        Guards against drift between the dataclass and the method signature."""
+        mat = PbrProperties.from_dict(_sample_data())
+        new = mat.override(
+            color=(0.2, 0.3, 0.4),
+            roughness=0.7,
+            metalness=0.1,
+            ior=1.45,
+            transmission=0.8,
+            opacity=0.9,
+            transparent=True,
+            alpha_test=0.5,
+            clearcoat=0.5,
+            clearcoat_roughness=0.2,
+            sheen=1.0,
+            sheen_color=(0.9, 0.8, 0.7),
+            sheen_roughness=0.3,
+            anisotropy=0.4,
+            anisotropy_rotation=1.2,
+            specular_intensity=0.6,
+            specular_color=(1.0, 0.9, 0.8),
+            emissive=(0.1, 0.1, 0.1),
+            emissive_intensity=2.0,
+            attenuation_color=(1.0, 0.8, 0.6),
+            attenuation_distance=0.4,
+            thickness=0.3,
+            iridescence=1.0,
+            iridescence_ior=1.3,
+            iridescence_thickness_range=(100.0, 400.0),
+            dispersion=0.5,
+            normal_scale=(1.5, 1.5),
+            displacement_scale=0.2,
+            side=2,
+        )
+        assert new.values.color == [0.2, 0.3, 0.4]
+        assert new.values.roughness == 0.7
+        assert new.values.metalness == 0.1
+        assert new.values.ior == 1.45
+        assert new.values.transmission == 0.8
+        assert new.values.opacity == 0.9
+        assert new.values.transparent is True
+        assert new.values.alpha_test == 0.5
+        assert new.values.clearcoat == 0.5
+        assert new.values.clearcoat_roughness == 0.2
+        assert new.values.sheen == 1.0
+        assert new.values.sheen_color == [0.9, 0.8, 0.7]
+        assert new.values.sheen_roughness == 0.3
+        assert new.values.anisotropy == 0.4
+        assert new.values.anisotropy_rotation == 1.2
+        assert new.values.specular_intensity == 0.6
+        assert new.values.specular_color == [1.0, 0.9, 0.8]
+        assert new.values.emissive == [0.1, 0.1, 0.1]
+        assert new.values.emissive_intensity == 2.0
+        assert new.values.attenuation_color == [1.0, 0.8, 0.6]
+        assert new.values.attenuation_distance == 0.4
+        assert new.values.thickness == 0.3
+        assert new.values.iridescence == 1.0
+        assert new.values.iridescence_ior == 1.3
+        assert new.values.iridescence_thickness_range == [100.0, 400.0]
+        assert new.values.dispersion == 0.5
+        assert new.values.normal_scale == [1.5, 1.5]
+        assert new.values.displacement_scale == 0.2
+        assert new.values.side == 2
+
+    def test_override_id_gets_variant_hash(self):
+        """Overriding produces a distinct id so variants don't collapse
+        when keyed by id (e.g., in a `{m.id: m}` dict for collect_gltf)."""
+        mat = PbrProperties.from_dict(_sample_data())
+        red = mat.override(color=(1.0, 0.0, 0.0))
+        assert red.id != mat.id
+        assert red.id.startswith(f"{mat.name}_")
+        assert red.name == mat.name  # display name unchanged
+
+    def test_override_id_is_deterministic(self):
+        """Same override on same parent → identical id. Stable across runs."""
+        mat = PbrProperties.from_dict(_sample_data())
+        a = mat.override(color=(1.0, 0.0, 0.0))
+        b = mat.override(color=(1.0, 0.0, 0.0))
+        assert a.id == b.id
+
+    def test_override_different_kwargs_different_ids(self):
+        mat = PbrProperties.from_dict(_sample_data())
+        red = mat.override(color=(1.0, 0.0, 0.0))
+        green = mat.override(color=(0.0, 1.0, 0.0))
+        rough = mat.override(roughness=0.9)
+        # All four are distinguishable
+        assert len({mat.id, red.id, green.id, rough.id}) == 4
+
+    def test_override_chain_cascades(self):
+        """Hash input includes parent id, so chained overrides produce
+        fresh hashes that encode the full chain history."""
+        mat = PbrProperties.from_dict(_sample_data())
+        red = mat.override(color=(1.0, 0.0, 0.0))
+        red_rough = red.override(roughness=0.1)
+        # Chained override has a distinct id from the parent variant
+        assert red_rough.id != red.id
+        # Base name stem preserved — no suffix accumulation
+        assert red_rough.id.startswith(f"{mat.name}_")
+        # Structurally: "{name}_{8 hex}" (one suffix, not two)
+        parts = red_rough.id.split("_")
+        assert len(parts[-1]) == 8 and all(c in "0123456789abcdef" for c in parts[-1])
+
+    def test_override_chain_vs_combined_differ(self):
+        """A.override(color).override(rough) and A.override(color, rough)
+        produce different ids because the chain hashes the intermediate id.
+        User accepted this trade-off: 'ignore reverting properties'."""
+        mat = PbrProperties.from_dict(_sample_data())
+        chained = mat.override(color=(1, 0, 0)).override(roughness=0.1)
+        combined = mat.override(color=(1, 0, 0), roughness=0.1)
+        # Values are identical
+        assert chained.values.color == combined.values.color
+        assert chained.values.roughness == combined.values.roughness
+        # But ids differ because the chain passes through an intermediate id
+        assert chained.id != combined.id
+
+    def test_override_noop_preserves_id(self):
+        """override() with no kwargs returns a copy with the id unchanged."""
+        mat = PbrProperties.from_dict(_sample_data())
+        same = mat.override()
+        assert same.id == mat.id
+
+    def test_override_ids_collide_free_in_dict(self):
+        """The whole point: keying a dict by `m.id` must keep variants
+        distinct so collect_gltf_textures produces one material per variant."""
+        mat = PbrProperties.from_dict(_sample_data())
+        variants = [mat] + [
+            mat.override(color=c) for c in [(1, 0, 0), (0, 1, 0), (0, 0, 1)]
+        ]
+        d = {m.id: m for m in variants}
+        assert len(d) == len(variants)
+
+    def test_scale_id_gets_variant_hash(self):
+        """scale() changes how the material renders (UV tiling), so it
+        must produce a distinct id — otherwise dict-keyed-by-id variants
+        collide with the base material."""
+        mat = PbrProperties.from_dict(_sample_data())
+        s = mat.scale(2, 2)
+        assert s.id != mat.id
+        assert s.id.startswith(f"{mat.name}_")
+        assert s.name == mat.name
+
+    def test_scale_id_is_deterministic(self):
+        mat = PbrProperties.from_dict(_sample_data())
+        a = mat.scale(2, 2)
+        b = mat.scale(2, 2)
+        assert a.id == b.id
+
+    def test_scale_different_factors_different_ids(self):
+        mat = PbrProperties.from_dict(_sample_data())
+        s22 = mat.scale(2, 2)
+        s44 = mat.scale(4, 4)
+        s24 = mat.scale(2, 4)
+        assert len({mat.id, s22.id, s44.id, s24.id}) == 4
+
+    def test_scale_fixed_flag_affects_id(self):
+        """fixed=True vs fixed=False are different rendering modes and
+        should produce different ids even with the same u/v."""
+        mat = PbrProperties.from_dict(_sample_data())
+        a = mat.scale(2, 2, fixed=True)
+        b = mat.scale(2, 2, fixed=False)
+        assert a.id != b.id
+
+    def test_scale_after_override_cascades(self):
+        """Chained override().scale() — chain passes through intermediate
+        id, so the scale's hash encodes the chain history."""
+        mat = PbrProperties.from_dict(_sample_data())
+        red_scaled = mat.override(color=(1, 0, 0)).scale(2, 2)
+        plain_scaled = mat.scale(2, 2)
+        assert red_scaled.id != plain_scaled.id
+        assert red_scaled.id.startswith(f"{mat.name}_")
+
+    def test_mixed_override_scale_variants_collide_free(self):
+        """End-to-end: override + scale mix still yields unique ids."""
+        mat = PbrProperties.from_dict(_sample_data())
+        variants = [
+            mat,
+            mat.override(color=(1, 0, 0)),
+            mat.scale(2, 2),
+            mat.scale(4, 4),
+            mat.override(color=(1, 0, 0)).scale(2, 2),
+            mat.scale(2, 2).override(color=(1, 0, 0)),
+        ]
+        d = {m.id: m for m in variants}
+        assert len(d) == len(variants)
+
+    def test_two_materials_with_duplicated_variants_dedupe_to_six(self):
+        """Two base materials, three variants each (overrides + scale),
+        every variant instantiated twice from the same overrides.
+        12 total list entries → 6 unique ids after dedup by id."""
+        mat_a = PbrProperties.from_dict(
+            dict(_sample_data(), id="A", name="A")
+        )
+        mat_b = PbrProperties.from_dict(
+            dict(_sample_data(), id="B", name="B")
+        )
+
+        def three_variants(m):
+            return [
+                m.override(color=(1, 0, 0)),
+                m.override(roughness=0.1),
+                m.scale(2, 2),
+            ]
+
+        # Build each variant twice — distinct object instances, same
+        # kwargs, so determinism requires their ids to match.
+        materials = (
+            three_variants(mat_a) + three_variants(mat_a)
+            + three_variants(mat_b) + three_variants(mat_b)
+        )
+        assert len(materials) == 12
+        # Distinct instances (two-by-two)
+        assert materials[0] is not materials[3]
+
+        d = {m.id: m for m in materials}
+        assert len(d) == 6
+
+        # Each base produces a disjoint subset — no cross-contamination
+        a_ids = {m.id for m in materials[:3]}
+        b_ids = {m.id for m in materials[6:9]}
+        assert a_ids.isdisjoint(b_ids)
+        # All A-variant ids are prefixed by "A_", B-variant ids by "B_"
+        assert all(i.startswith("A_") for i in a_ids)
+        assert all(i.startswith("B_") for i in b_ids)
+
+        # End-to-end: collect_gltf_textures on the deduped dict emits
+        # exactly 6 glTF materials, not 12.
+        from threejs_materials.gltf import collect_gltf_textures
+        gltf = collect_gltf_textures(d)
+        assert len(gltf.materials) == 6
+
     def test_color_override_preserves_original_texture(self):
         data = _sample_data()
         data["textures"]["color"] = "data:image/png;base64,abc"
