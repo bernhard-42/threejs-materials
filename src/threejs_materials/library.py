@@ -128,19 +128,6 @@ class PbrProperties:
         if isinstance(color, str):
             color = _parse_color_string(color, as_linear=False)
 
-        if pbr.get("map") is not None:
-            color = (1, 1, 1)
-
-        if pbr.get("roughnessMap") is not None:
-            roughness = 1.0
-        else:
-            roughness = pbr.get("roughness")
-
-        if pbr.get("metalnessMap") is not None:
-            metalness = 1.0
-        else:
-            metalness = pbr.get("metalness")
-
         new_dict = {
             "name": name,
             "id": id,
@@ -148,8 +135,8 @@ class PbrProperties:
             "texture_repeat": [1 / s for s in texture_scale],
             "normalize_uvs": normalize_uvs,
             "values": {
-                "metalness": metalness,
-                "roughness": roughness,
+                "metalness": pbr.get("metalness"),
+                "roughness": pbr.get("roughness"),
                 "color": color,
                 "ior": pbr.get("ior"),
                 "transmission": pbr.get("transmission"),
