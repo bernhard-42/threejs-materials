@@ -118,7 +118,9 @@ class _SourceLoader:
             result = self._module.fetch(name, res_key, Path(tmp))
             if result.mtlx_path:
                 print("baking ...", end=" ", flush=True)
-                properties, _, tex_dir = _process_mtlx(result.mtlx_path)
+                properties, _, tex_dir = _process_mtlx(
+                    result.mtlx_path, resolution=res_key
+                )
             else:
                 properties = result.properties
                 tex_dir = None

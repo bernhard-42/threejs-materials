@@ -9,6 +9,7 @@ import pytest
 from threejs_materials.convert import (
     _evaluate_constant_scalar_graph,
     _recover_baker_clobbered_iors,
+    _resolution_to_pixels,
     encode_texture_base64,
     extract_materials,
     parse_value,
@@ -26,6 +27,27 @@ from conftest import (
 # ---------------------------------------------------------------------------
 # parse_value
 # ---------------------------------------------------------------------------
+
+
+class TestResolutionToPixels:
+    """Resolution threading through _process_mtlx / bake_materials."""
+
+    def test_known_resolutions(self):
+        assert _resolution_to_pixels("1K") == 1024
+        assert _resolution_to_pixels("2K") == 2048
+        assert _resolution_to_pixels("4K") == 4096
+        assert _resolution_to_pixels("8K") == 8192
+
+    def test_case_insensitive(self):
+        assert _resolution_to_pixels("4k") == 4096
+        assert _resolution_to_pixels("4K") == 4096
+
+    def test_unknown_falls_back_to_1k(self):
+        """Unknown strings return 1024 — preserves historical default
+        rather than raising (the baker is downstream of user input)."""
+        assert _resolution_to_pixels("42K") == 1024
+        assert _resolution_to_pixels("") == 1024
+        assert _resolution_to_pixels("garbage") == 1024
 
 
 class TestParseValue:
@@ -458,6 +480,61 @@ class TestToThreejsPhysical:
         assert props["metalness"]["value"] == 0.0
         assert props["roughness"]["value"] == 0.3
         assert props["ior"]["value"] == 1.5
+
+    def test_open_pbr_surface_base_weight_preserved_with_texture(
+        self, tmp_path, tiny_png,
+    ):
+        """open_pbr_surface's `base_weight` must survive as a scalar when
+        `base_color` is a texture.
+
+        The MaterialX baker leaves `base_weight` as a literal on the shader
+        and does NOT fold it into the baked `base_color` texture (verified
+        via TextureBaker source — see materialx_baker.md). Three.js
+        reproduces the `base_weight × base_color` shading math at render
+        time, so emitting a neutral [1,1,1] would drop the factor and
+        brighten the material.
+
+        Regression for the asymmetry-with-standard_surface bug fixed in
+        v1.1.1: previously `has_tex("base_color")` forced color=[1,1,1]
+        regardless of `base_weight`.
+        """
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        (tex_dir / "base_color.png").write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "T",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 0.5,
+                "base_metalness": 0.0,
+            },
+            "textures": {"base_color": {"file": "textures/base_color.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["color"]["value"] == [0.5, 0.5, 0.5]
+        assert "texture" in props["color"]
+
+    def test_open_pbr_surface_base_weight_default_emits_neutral(
+        self, tmp_path, tiny_png,
+    ):
+        """When `base_weight` is its default 1.0 and a texture is present,
+        the scalar remains [1,1,1] (neutral) — texture controls fully."""
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        (tex_dir / "base_color.png").write_bytes(tiny_png.read_bytes())
+
+        mat = {
+            "name": "T",
+            "shader_model": "open_pbr_surface",
+            "params": {
+                "base_weight": 1.0,
+                "base_metalness": 0.0,
+            },
+            "textures": {"base_color": {"file": "textures/base_color.png"}},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["color"]["value"] == [1.0, 1.0, 1.0]
 
     def test_open_pbr_surface_emission(self, tmp_path):
         mat = {
@@ -1115,6 +1192,22 @@ class TestStandardSurfaceProceduralFeatures:
         assert props["sheen"]["value"] == 1.0
         assert "texture" in props["sheenColor"]
 
+    def test_literal_sheen_survives_procedural_sheen_color(
+        self, tmp_path, tiny_png,
+    ):
+        """Literal `sheen = 0.5` + procedural `sheen_color` must preserve
+        the 0.5. Previously the has_tex("sheen_color") check clobbered
+        the literal scalar to 1.0, rendering the sheen layer 2× too strong.
+        """
+        mat = {
+            "name": "T", "shader_model": "standard_surface",
+            "params": {"base": 1.0, "base_color": [1, 1, 1], "sheen": 0.5},
+            "textures": {"sheen_color": _make_tex(tmp_path, tiny_png, "sheen")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["sheen"]["value"] == 0.5      # ← was 1.0 before fix
+        assert "texture" in props["sheenColor"]
+
     def test_procedural_emission_color_without_weight_stays_off(
         self, tmp_path, tiny_png,
     ):
@@ -1261,6 +1354,22 @@ class TestOpenPbrProceduralFeatures:
         }
         props = to_threejs_physical(mat, tmp_path)
         assert props["sheen"]["value"] == 1.0
+        assert "texture" in props["sheenColor"]
+
+    def test_literal_fuzz_weight_survives_procedural_fuzz_color(
+        self, tmp_path, tiny_png,
+    ):
+        """Literal `fuzz_weight = 0.7` + procedural `fuzz_color` must
+        preserve the 0.7. Previously the has_tex("fuzz_color") check
+        clobbered the literal scalar to 1.0.
+        """
+        mat = {
+            "name": "T", "shader_model": "open_pbr_surface",
+            "params": {"base_weight": 1.0, "base_color": [1, 1, 1], "fuzz_weight": 0.7},
+            "textures": {"fuzz_color": _make_tex(tmp_path, tiny_png, "fz")},
+        }
+        props = to_threejs_physical(mat, tmp_path)
+        assert props["sheen"]["value"] == pytest.approx(0.7)
         assert "texture" in props["sheenColor"]
 
     def test_procedural_emission_color_without_luminance_stays_off(

@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Read(//Users/bernhard/.materialx-cache/**)"
+      "Read(//Users/bernhard/.materialx-cache/**)",
+      "Read(//Users/bernhard/Development/MaterialX/**)"
     ]
   }
 }

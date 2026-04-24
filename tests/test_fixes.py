@@ -734,7 +734,7 @@ class TestSilentFailures:
         monkeypatch.setattr("threejs_materials.sources.CACHE_DIR", tmp_path)
 
         # Simulate: _process_mtlx returns empty properties
-        def fake_process_mtlx(path):
+        def fake_process_mtlx(path, resolution="1K"):
             return {}, None, path.parent
 
         monkeypatch.setattr("threejs_materials.sources._process_mtlx", fake_process_mtlx)

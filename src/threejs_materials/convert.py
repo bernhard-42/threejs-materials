@@ -447,7 +447,9 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             tex("clearcoatNormal", "coat_normal")
 
         sheen = p.get("sheen", 0.0)
-        if has_tex("sheen_color"):
+        # Only infer "sheen on" from a procedural sheen_color when no
+        # explicit weight was authored — preserve literal sheen < 1.0.
+        if sheen == 0.0 and has_tex("sheen_color"):
             sheen = 1.0
         if sheen > 0.0:
             val("sheen", sheen)
@@ -626,11 +628,15 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             val("dispersion", dispersion)
 
     elif model == "open_pbr_surface":
-        # Three.js multiplies scalar × texture — set to neutral when texture exists.
+        # Mirrors standard_surface's dielectric handling: the baker leaves
+        # `base_weight` as a literal on the shader input and does NOT fold it
+        # into the baked `base_color` texture. Emit `base_weight` as the
+        # scalar so Three.js reproduces the MaterialX shading math
+        # `base_weight × base_color` at render time. See materialx_baker.md.
         base_weight = p.get("base_weight", 1.0)
         base_color = p.get("base_color", [0.8, 0.8, 0.8])
         if has_tex("base_color"):
-            val("color", [1.0, 1.0, 1.0])
+            val("color", [base_weight, base_weight, base_weight])
         else:
             val("color", [c * base_weight for c in base_color])
         tex("color", "base_color")
@@ -687,7 +693,9 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
 
         # OpenPBR fuzz → Three.js sheen
         fuzz = p.get("fuzz_weight", 0.0)
-        if has_tex("fuzz_color"):
+        # Only infer "fuzz on" from a procedural fuzz_color when no
+        # explicit weight was authored — preserve literal fuzz_weight < 1.0.
+        if fuzz == 0.0 and has_tex("fuzz_color"):
             fuzz = 1.0
         if fuzz > 0.0:
             val("sheen", fuzz)
@@ -872,12 +880,34 @@ def _safe_copy(src: Path, dst_dir: Path) -> Path:
     return dst
 
 
-def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None, Path]:
+_RESOLUTION_PIXELS: dict[str, int] = {
+    "1K": 1024,
+    "2K": 2048,
+    "4K": 4096,
+    "8K": 8192,
+}
+
+
+def _resolution_to_pixels(resolution: str) -> int:
+    """Parse a resolution token (``"1K"``, ``"2K"``, ``"4K"``, ``"8K"``) into
+    a pixel dimension. Unknown strings fall back to 1024 to preserve the
+    historical default without raising."""
+    return _RESOLUTION_PIXELS.get(resolution.upper(), 1024)
+
+
+def _process_mtlx(
+    mtlx_path: Path, resolution: str = "1K"
+) -> tuple[dict, str | None, Path]:
     """Core pipeline: load → bake → extract → merge → properties.
 
     Returns ``(properties_dict, shader_model, tex_dir)`` where *tex_dir*
     is the directory containing baked texture files.
+
+    ``resolution`` controls the baker's texture dimensions. Default ``"1K"``
+    (1024×1024). Higher resolutions give sharper baked output at the cost
+    of bake time and cache size (a 4K texture is 16× the memory of a 1K).
     """
+    px = _resolution_to_pixels(resolution)
     base_dir = mtlx_path.parent
     tex_dir = base_dir / "textures"
 
@@ -903,6 +933,7 @@ def _process_mtlx(mtlx_path: Path) -> tuple[dict, str | None, Path]:
     try:
         bake_materials(
             doc, search_path, baked_mtlx, tex_dir, mtlx_dir=base_dir,
+            width=px, height=px,
         )
         baked_doc, _ = load_document_with_stdlib(baked_mtlx)
         mats = extract_materials(baked_doc)

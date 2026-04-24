@@ -201,8 +201,12 @@ class PbrProperties:
         return cls.from_gltf(GLTF2.load(str(gltf_path)), index=index)
 
     @classmethod
-    def from_mtlx(cls, mtlx_file: str) -> PbrProperties:
-        """Convert a local .mtlx file to PbrProperties."""
+    def from_mtlx(cls, mtlx_file: str, resolution: str = "1K") -> PbrProperties:
+        """Convert a local .mtlx file to PbrProperties.
+
+        ``resolution`` controls the baker's output texture dimensions.
+        Accepts ``"1K"`` (default), ``"2K"``, ``"4K"``, or ``"8K"``.
+        """
         ensure_materialx()
         mtlx_path = Path(mtlx_file).resolve()
         if not mtlx_path.exists():
@@ -225,7 +229,7 @@ class PbrProperties:
 
         baked_mtlx = mtlx_path.parent / "material.baked.mtlx"
         try:
-            properties, _, tex_dir = _process_mtlx(mtlx_path)
+            properties, _, tex_dir = _process_mtlx(mtlx_path, resolution=resolution)
         finally:
             baked_mtlx.unlink(missing_ok=True)
 
