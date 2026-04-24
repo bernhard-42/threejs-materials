@@ -116,6 +116,7 @@ class PbrProperties:
         source: str = "unknown",
         normalize_uvs: bool = True,
         texture_scale: tuple[float, float] = (1, 1),
+        overrides: dict | None = None,
     ) -> PbrProperties:
         if texture_scale == 0:
             raise ValueError("texture_scale needs to be > 0")
@@ -128,25 +129,39 @@ class PbrProperties:
         if isinstance(color, str):
             color = _parse_color_string(color, as_linear=False)
 
+        values = {
+            "metalness": pbr.get("metalness"),
+            "roughness": pbr.get("roughness"),
+            "color": color,
+            "ior": pbr.get("ior"),
+            "transmission": pbr.get("transmission"),
+            "clearcoat": pbr.get("clearcoat"),
+            "emissive": pbr.get("emissive"),
+            "opacity": pbr.get("opacity"),
+            "dispersion": pbr.get("dispersion"),
+            "specular_color": pbr.get("specular_color"),
+            "specular_intensity": pbr.get("specular_intensity"),
+        }
+
+        if overrides:
+            if "color" in overrides:
+                oc = overrides["color"]
+                if isinstance(oc, int):
+                    oc = f"#{oc:06x}"
+                if isinstance(oc, str):
+                    oc = list(_parse_color_string(oc, as_linear=False))
+                elif isinstance(oc, (tuple, list)):
+                    oc = list(oc)
+                overrides = {**overrides, "color": oc}
+            values.update(overrides)
+
         new_dict = {
             "name": name,
             "id": id,
             "source": source,
             "texture_repeat": [1 / s for s in texture_scale],
             "normalize_uvs": normalize_uvs,
-            "values": {
-                "metalness": pbr.get("metalness"),
-                "roughness": pbr.get("roughness"),
-                "color": color,
-                "ior": pbr.get("ior"),
-                "transmission": pbr.get("transmission"),
-                "clearcoat": pbr.get("clearcoat"),
-                "emissive": pbr.get("emissive"),
-                "opacity": pbr.get("opacity"),
-                "dispersion": pbr.get("dispersion"),
-                "specular_color": pbr.get("specular_color"),
-                "specular_intensity": pbr.get("specular_intensity"),
-            },
+            "values": values,
             "textures": {
                 "color": pbr.get("map"),
                 "normal": pbr.get("normalMap"),
