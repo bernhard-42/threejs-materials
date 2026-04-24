@@ -40,6 +40,12 @@ pip install threejs-materials
 - `pygltflib >= 1.16` — glTF 2.0 file I/O (pure Python)
 - `requests >= 2.31.0` — HTTP downloads from material sources
 
+This allows you to
+
+- import materials from `*.gltf` and `*.glb` files (e.g. baked materials from blender)
+- export materials in the internal format to `*.gltf` and `*.glb` files
+- inject materials into glTF exports
+
 ### MaterialX support (optional)
 
 ```bash
@@ -53,7 +59,8 @@ pip install threejs-materials[materialx]
 - `materialx >= 1.39.4` — MaterialX SDK with TextureBaker
 - `openexr >= 3.3` — EXR to PNG conversion
 
-Note: For the latest Python, the installer tries to compile materialx and openexr. This might not be possible under Windows if no compiler is installed.
+This lets you download MaterialX files from the [MaterialX sources](#sources) and bake them into the internal format.
+However, for the latest Python, the installer tries to compile materialx and openexr. This might not be possible under Windows if no compiler is installed.
 
 ## Input Formats
 
@@ -408,15 +415,15 @@ The visual result is identical — all changes are representation differences, n
 
 `to_gltf()` is mostly a field-name translation from our internal format to glTF 2.0, but seven spec-mandated transformations repackage data:
 
-| Internal                                           | glTF equivalent                                                                        | Reason                                                                        |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `metalness` + `roughness` textures (separate)      | packed `metallicRoughnessTexture` (G=rough, B=metal)                                   | glTF 2.0 core: only packed form exists                                        |
-| `color` texture + `opacity` texture                | merged into `baseColorTexture` alpha channel                                           | glTF has one base-color texture slot                                          |
-| `opacity` scalar                                   | folded into `baseColorFactor[3]` (alpha)                                               | glTF `baseColorFactor` is always 4 elements `[r, g, b, a]`                    |
-| `transparent` / `alphaTest`                        | `alphaMode` enum (`OPAQUE`/`MASK`/`BLEND`) + `alphaCutoff`                             | glTF's alpha-handling vocabulary                                              |
-| `iridescenceThicknessRange = [min, max]`           | split into `iridescenceThicknessMinimum` + `iridescenceThicknessMaximum`               | `KHR_materials_iridescence` schema                                            |
-| `dispersion > 0`                                   | auto-adds minimal `KHR_materials_volume = {thicknessFactor: 0}`                        | `KHR_materials_dispersion` spec requires volume to also be present            |
-| `emissiveIntensity ≠ 1.0`                          | `KHR_materials_emissive_strength` extension                                            | glTF core has no emissive intensity — the extension is the Khronos-blessed way |
+| Internal                                      | glTF equivalent                                                          | Reason                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `metalness` + `roughness` textures (separate) | packed `metallicRoughnessTexture` (G=rough, B=metal)                     | glTF 2.0 core: only packed form exists                                         |
+| `color` texture + `opacity` texture           | merged into `baseColorTexture` alpha channel                             | glTF has one base-color texture slot                                           |
+| `opacity` scalar                              | folded into `baseColorFactor[3]` (alpha)                                 | glTF `baseColorFactor` is always 4 elements `[r, g, b, a]`                     |
+| `transparent` / `alphaTest`                   | `alphaMode` enum (`OPAQUE`/`MASK`/`BLEND`) + `alphaCutoff`               | glTF's alpha-handling vocabulary                                               |
+| `iridescenceThicknessRange = [min, max]`      | split into `iridescenceThicknessMinimum` + `iridescenceThicknessMaximum` | `KHR_materials_iridescence` schema                                             |
+| `dispersion > 0`                              | auto-adds minimal `KHR_materials_volume = {thicknessFactor: 0}`          | `KHR_materials_dispersion` spec requires volume to also be present             |
+| `emissiveIntensity ≠ 1.0`                     | `KHR_materials_emissive_strength` extension                              | glTF core has no emissive intensity — the extension is the Khronos-blessed way |
 
 All seven are required by glTF 2.0 core or by the relevant `KHR_materials_*` extension — none are invented by this library. Scalar values, color values, and pixel data are **not altered**; the data is just repackaged into the shape glTF expects.
 
