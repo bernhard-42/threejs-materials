@@ -5,12 +5,15 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+
+from platformdirs import user_cache_dir
+
 from threejs_materials.convert import _process_mtlx
 from threejs_materials.sources import ambientcg, gpuopen, polyhaven, physicallybased
 from threejs_materials.sources.common import SourceResult
 from threejs_materials.utils import _is_data_uri
 
-CACHE_DIR = Path.home() / ".materialx-cache"
+CACHE_DIR = Path(user_cache_dir("threejs-materials")) / "materialx"
 
 _SOURCE_MODULES = {
     "ambientcg": ambientcg,

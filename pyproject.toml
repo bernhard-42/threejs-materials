@@ -10,6 +10,7 @@ dependencies = [
     "pillow>=12.2.0, < 12.3.0",
     "pygltflib>=1.16, < 2.0",
     "requests>=2.31.0, <3.0",
+    "platformdirs >= 4.9.6, < 5.0.0",
 ]
 
 [project.optional-dependencies]
