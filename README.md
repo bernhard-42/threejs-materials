@@ -404,6 +404,27 @@ What changed:
 
 The visual result is identical — all changes are representation differences, not data loss.
 
+#### glTF export transformations
+
+`to_gltf()` is mostly a field-name translation from our internal format to glTF 2.0, but seven spec-mandated transformations repackage data:
+
+| Internal                                           | glTF equivalent                                                                        | Reason                                                                        |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `metalness` + `roughness` textures (separate)      | packed `metallicRoughnessTexture` (G=rough, B=metal)                                   | glTF 2.0 core: only packed form exists                                        |
+| `color` texture + `opacity` texture                | merged into `baseColorTexture` alpha channel                                           | glTF has one base-color texture slot                                          |
+| `opacity` scalar                                   | folded into `baseColorFactor[3]` (alpha)                                               | glTF `baseColorFactor` is always 4 elements `[r, g, b, a]`                    |
+| `transparent` / `alphaTest`                        | `alphaMode` enum (`OPAQUE`/`MASK`/`BLEND`) + `alphaCutoff`                             | glTF's alpha-handling vocabulary                                              |
+| `iridescenceThicknessRange = [min, max]`           | split into `iridescenceThicknessMinimum` + `iridescenceThicknessMaximum`               | `KHR_materials_iridescence` schema                                            |
+| `dispersion > 0`                                   | auto-adds minimal `KHR_materials_volume = {thicknessFactor: 0}`                        | `KHR_materials_dispersion` spec requires volume to also be present            |
+| `emissiveIntensity ≠ 1.0`                          | `KHR_materials_emissive_strength` extension                                            | glTF core has no emissive intensity — the extension is the Khronos-blessed way |
+
+All seven are required by glTF 2.0 core or by the relevant `KHR_materials_*` extension — none are invented by this library. Scalar values, color values, and pixel data are **not altered**; the data is just repackaged into the shape glTF expects.
+
+Two minor policy choices sit inside the transformations (both emit spec-valid output, but pick among equally-valid alternatives):
+
+- **Opacity-texture-only → `alphaMode = "MASK"`** (with `alphaCutoff = 0.5`) rather than `"BLEND"`. Avoids depth-sort bleed-through on closed shapes like spheres.
+- **`iridescenceThicknessRange = [X, X]`** when the MaterialX source has a single `thin_film_thickness` scalar (uniform thickness). Could also be emitted as `[0, X]`; we pick `[X, X]` to faithfully represent the single-scalar semantic.
+
 #### Note on displacement
 
 Displacement mapping is the only property fully lost in the glTF conversion. In practice this is rarely an issue for CAD workflows:
