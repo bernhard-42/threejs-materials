@@ -363,15 +363,22 @@ class TestOverride:
         new = mat.override(roughness=0.1)
         assert new.maps.color == "data:image/png;base64,abc"
 
-    def test_color_override_removes_texture_and_warns(self):
+    def test_color_override_preserves_texture_as_tint(self):
+        """Per glTF 2.0 §3.9.2 ('If both factors and textures are present,
+        the factor value acts as a linear multiplier for the corresponding
+        texture values'), `override(color=...)` on a material with a color
+        texture must KEEP the texture and update only the scalar — Three.js
+        will then render `color × textureSample` per pixel, tinting the
+        texture. The previous behavior of deleting the texture and warning
+        was the legacy 'color OR texture' interpretation, contradicted by
+        the spec."""
         data = _sample_data()
         data["textures"]["color"] = "data:image/png;base64,abc"
         mat = PbrProperties.from_dict(data)
 
-        with pytest.warns(UserWarning, match="color texture removed"):
-            red = mat.override(color=(0.5, 0.0, 0.0))
+        red = mat.override(color=(0.5, 0.0, 0.0))
         assert red.values.color == [0.5, 0.0, 0.0]
-        assert red.maps.color is None
+        assert red.maps.color == "data:image/png;base64,abc"
 
     def test_color_override_without_texture_sets_value(self):
         mat = PbrProperties.from_dict(_sample_data())
@@ -610,14 +617,19 @@ class TestOverride:
         gltf = collect_gltf_textures(d)
         assert len(gltf.materials) == 6
 
-    def test_color_override_preserves_original_texture(self):
+    def test_color_override_does_not_mutate_original(self):
+        """`override()` returns a new PbrProperties; the source must not be
+        modified, regardless of whether it carries a color texture."""
         data = _sample_data()
         data["textures"]["color"] = "data:image/png;base64,abc"
         mat = PbrProperties.from_dict(data)
 
-        with pytest.warns(UserWarning):
-            mat.override(color=(0.5, 0.0, 0.0))
-        # Original must be unchanged
+        new = mat.override(color=(0.5, 0.0, 0.0))
+        # New material reflects the override
+        assert new.values.color == [0.5, 0.0, 0.0]
+        assert new.maps.color == "data:image/png;base64,abc"  # texture preserved (tint)
+        # Original unchanged
+        assert mat.values.color == [1.0, 0.0, 0.0]
         assert mat.maps.color == "data:image/png;base64,abc"
 
     def test_to_dict_includes_repeat(self):

@@ -541,13 +541,6 @@ class PbrProperties:
         for key, value in overrides.items():
             if isinstance(value, tuple):
                 value = list(value)
-            if key == "color" and new_maps.color is not None:
-                new_maps.color = None
-                warnings.warn(
-                    "color override: existing color texture removed and "
-                    "replaced by solid color value",
-                    stacklevel=2,
-                )
             setattr(new_values, key, value)
         # Unique variant id = "<name>_<8-hex>".  The hash input includes
         # the parent id, so chained overrides cascade into distinct hashes
