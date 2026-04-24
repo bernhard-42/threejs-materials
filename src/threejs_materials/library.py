@@ -221,17 +221,15 @@ class PbrProperties:
             baked_mtlx.unlink(missing_ok=True)
 
         name = mtlx_path.stem
-        return cls.from_dict(
-            {
-                "id": name,
-                "name": name,
-                "source": "local",
-                "url": "",
-                "license": "",
-                "properties": properties,
-                "maps_dir": str(tex_dir),
-            }
-        )
+        return cls.from_dict({
+            "id": name,
+            "name": name,
+            "source": "local",
+            "url": "",
+            "license": "",
+            "properties": properties,
+            "maps_dir": str(tex_dir),
+        })
 
     @classmethod
     def from_gpuopen(cls, name: str, resolution: str = "1K") -> PbrProperties:
@@ -439,18 +437,16 @@ class PbrProperties:
                 raise ValueError("All texture files must be in the same directory")
             maps_dir = common
 
-        return cls.from_dict(
-            {
-                "id": id,
-                "name": id,
-                "source": "custom",
-                "url": "",
-                "license": "",
-                "values": values,
-                "textures": textures,
-                "maps_dir": str(maps_dir) if maps_dir is not None else None,
-            }
-        )
+        return cls.from_dict({
+            "id": id,
+            "name": id,
+            "source": "custom",
+            "url": "",
+            "license": "",
+            "values": values,
+            "textures": textures,
+            "maps_dir": str(maps_dir) if maps_dir is not None else None,
+        })
 
     # -------------------------------------------------------------------
     # Transforms
