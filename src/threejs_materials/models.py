@@ -235,8 +235,21 @@ class PbrOverrides:
     Excludes UV-transform parameters (``texture_scale``, ``fixed_size``) since
     those are not PBR material properties per the glTF spec — they live on
     ``TextureTransform`` instead and are applied via ``mat.scale(...)``.
+
+    Type hints on the 5 color fields (``color``, ``emissive``, ``sheen_color``,
+    ``specular_color``, ``attenuation_color``) reflect the **input** type
+    accepted by the constructor — the permissive :data:`Color` alias.
+    ``__post_init__`` normalizes each to a 3-tuple of floats (sRGB for
+    ``color``, linear for the others); reads always observe the normalized
+    form despite the wider annotation.
+
+    **Extension point.** Subclasses can override the ``_color_to_tuple``
+    static method to bridge a custom color type (e.g. build123d's
+    ``Color``) to a 3- or 4-tuple of floats. The hook runs before the
+    standard normalizer, so subclasses only need to handle the type
+    coercion — sRGB-vs-linear handling and alpha lifting stay in the base.
     """
-    color: tuple[float, float, float] | None = None
+    color: Color | None = None
     roughness: float | None = None
     metalness: float | None = None
     ior: float | None = None
@@ -247,15 +260,15 @@ class PbrOverrides:
     clearcoat: float | None = None
     clearcoat_roughness: float | None = None
     sheen: float | None = None
-    sheen_color: tuple[float, float, float] | None = None
+    sheen_color: Color | None = None
     sheen_roughness: float | None = None
     anisotropy: float | None = None
     anisotropy_rotation: float | None = None
     specular_intensity: float | None = None
-    specular_color: tuple[float, float, float] | None = None
-    emissive: tuple[float, float, float] | None = None
+    specular_color: Color | None = None
+    emissive: Color | None = None
     emissive_intensity: float | None = None
-    attenuation_color: tuple[float, float, float] | None = None
+    attenuation_color: Color | None = None
     attenuation_distance: float | None = None
     thickness: float | None = None
     iridescence: float | None = None
@@ -265,19 +278,28 @@ class PbrOverrides:
     normal_scale: tuple[float, float] | None = None
     displacement_scale: float | None = None
 
+    @staticmethod
+    def _color_to_tuple(c):
+        """Subclass extension point: coerce a custom color type to a form
+        the normalizer accepts (string / 3-tuple / 4-tuple / list).
+        Default is passthrough; ``int`` is already handled in __post_init__."""
+        return c
+
     def __post_init__(self):
-        # `color` is sRGB-stored (matches three-cad-viewer's setRGB(SRGBColorSpace)).
-        # Alpha component (4-tuple / #rrggbbaa) lifts to opacity unless explicit.
+        def _prep(c):
+            if isinstance(c, int) and not isinstance(c, bool):
+                c = f"#{c:06x}"
+            return self._color_to_tuple(c)
+
         if self.color is not None:
-            rgb, alpha = _normalize_srgb_color(self.color)
+            rgb, alpha = _normalize_srgb_color(_prep(self.color))
             object.__setattr__(self, "color", rgb)
             if alpha is not None and self.opacity is None:
                 object.__setattr__(self, "opacity", alpha)
-        # These fields are linear-stored (glTF *Factor spec; Three.js bare-color).
         for fname in ("emissive", "sheen_color", "specular_color", "attenuation_color"):
             val = getattr(self, fname)
             if val is not None:
-                rgb, _ = _normalize_color(val)
+                rgb, _ = _normalize_color(_prep(val))
                 object.__setattr__(self, fname, rgb)
 
     def __repr__(self) -> str:

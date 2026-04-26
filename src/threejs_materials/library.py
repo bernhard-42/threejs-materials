@@ -32,6 +32,7 @@ from threejs_materials.utils import (
     _linear_to_srgb,
     _normalize_color,
     _normalize_srgb_color,
+    _srgb_to_linear,
 )
 
 # Color-typed override kwargs split by storage convention.
@@ -747,37 +748,39 @@ class PbrProperties:
     # Utilities
     # -------------------------------------------------------------------
 
-    def interpolate_color(self) -> tuple[float, float, float, float]:
+    def interpolate_color(self, override_color=None) -> tuple[float, float, float, float]:
         """Estimate a representative sRGB color + alpha for CAD mode display.
 
-        When a color texture is present, the texture's linear-space average
-        is used (with sRGB-encoding for output). When ``values.color`` is
-        present, it's already sRGB-stored — returned directly. The scalar is
-        physically correct for Three.js rendering (where it multiplies into
-        the albedo), but this method returns the perceptually-representative
-        preview color; including the scalar makes the preview darker than
-        the on-screen render, so the texture branch ignores it.
+        When ``override_color`` is given, it replaces ``values.color`` for the
+        preview — equivalent to what ``mat.override(color=override_color)``
+        would render, without materializing a new PbrProperties. Multiplied
+        in linear space against the color texture average if one exists.
         """
         color_val = self.values.color
         color_tex = self.maps.color
 
-        if isinstance(color_val, str):
-            # values.color stored as a string (CSS hex or named): sRGB by convention
+        def _tex_avg_linear():
+            if self.maps_dir is not None:
+                return _linear_average_texture(ref=color_tex, texture_dir=self.maps_dir)
+            return _linear_average_texture(texture=color_tex)
+
+        if override_color is not None:
+            ovr_srgb, _ = _normalize_srgb_color(override_color)
+            if color_tex is not None:
+                lr, lg, lb = _tex_avg_linear()
+                sr = _linear_to_srgb(lr * _srgb_to_linear(ovr_srgb[0]))
+                sg = _linear_to_srgb(lg * _srgb_to_linear(ovr_srgb[1]))
+                sb = _linear_to_srgb(lb * _srgb_to_linear(ovr_srgb[2]))
+            else:
+                sr, sg, sb = ovr_srgb
+        elif isinstance(color_val, str):
             sr, sg, sb = _normalize_srgb_color(color_val)[0]
         elif color_tex is not None:
-            # Texture average is computed in linear space → encode for output
-            if self.maps_dir is not None:
-                lr, lg, lb = _linear_average_texture(
-                    ref=color_tex, texture_dir=self.maps_dir
-                )
-            else:
-                lr, lg, lb = _linear_average_texture(texture=color_tex)
+            lr, lg, lb = _tex_avg_linear()
             sr, sg, sb = _linear_to_srgb(lr), _linear_to_srgb(lg), _linear_to_srgb(lb)
         elif isinstance(color_val, list):
-            # values.color is sRGB-stored — passthrough
             sr, sg, sb = color_val[:3]
         else:
-            # Fallback perceptual midgray (sRGB)
             sr, sg, sb = 0.5, 0.5, 0.5
 
         alpha = 1.0

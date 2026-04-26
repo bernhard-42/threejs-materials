@@ -992,6 +992,88 @@ class TestPbrOverrides:
         assert "color" not in r  # None fields hidden
         assert "metalness" not in r
 
+    def test_color_to_tuple_default_is_passthrough(self):
+        """Base class hook returns input unchanged. ``int`` is converted to
+        hex *before* the hook fires (in __post_init__), so subclasses
+        never need to handle the int case themselves."""
+        from threejs_materials import PbrOverrides
+        assert PbrOverrides._color_to_tuple("#ff0000") == "#ff0000"
+        assert PbrOverrides._color_to_tuple((1.0, 0.0, 0.0)) == (1.0, 0.0, 0.0)
+        assert PbrOverrides._color_to_tuple([0.5, 0.5, 0.5]) == [0.5, 0.5, 0.5]
+        # Hook is a passthrough — int stays int (post_init handles it earlier).
+        assert PbrOverrides._color_to_tuple(0xff0000) == 0xff0000
+
+    def test_color_int_input_works_end_to_end(self):
+        """Integer color flows through PbrOverrides() construction:
+        __post_init__ converts int → hex → hook (passthrough) → normalizer."""
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color=0xff0000)
+        assert o.color == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+
+    def test_color_int_midgray_stored_as_srgb_byte_ratio(self):
+        """0x808080 → "#808080" → sRGB-stored as 0.502 (no gamma decode at
+        the color field; viewer linearizes via setRGB(SRGBColorSpace))."""
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color=0x808080)
+        assert o.color == pytest.approx((0.502, 0.502, 0.502), abs=1e-3)
+
+    def test_bool_input_raises_not_treated_as_int(self):
+        """``bool`` is a subclass of ``int`` in Python — must NOT be
+        treated as a hex code (otherwise ``True`` would become
+        ``"#000001"``). It falls through to the normalizer's TypeError."""
+        from threejs_materials import PbrOverrides
+        with pytest.raises(TypeError, match="Unsupported color type"):
+            PbrOverrides(color=True)
+
+    def test_color_to_tuple_subclass_bridges_custom_type(self):
+        """Subclasses can override the hook to coerce a custom color class
+        into a 3- or 4-tuple. The standard normalizer then handles
+        sRGB-vs-linear and alpha lifting unchanged."""
+        from threejs_materials import PbrOverrides
+
+        class CustomColor:
+            def __init__(self, r, g, b, a=None):
+                self.r, self.g, self.b, self.a = r, g, b, a
+
+        class CustomPbrOverrides(PbrOverrides):
+            @staticmethod
+            def _color_to_tuple(c):
+                if isinstance(c, CustomColor):
+                    if c.a is not None:
+                        return (c.r, c.g, c.b, c.a)
+                    return (c.r, c.g, c.b)
+                return c
+
+        # 3-tuple via subclass: stored as sRGB, no opacity lift
+        o = CustomPbrOverrides(color=CustomColor(0.5, 0.6, 0.7))
+        assert o.color == (0.5, 0.6, 0.7)
+        assert o.opacity is None
+
+        # 4-tuple via subclass: alpha lifts into opacity (color field only)
+        o2 = CustomPbrOverrides(color=CustomColor(0.5, 0.6, 0.7, 0.4))
+        assert o2.color == (0.5, 0.6, 0.7)
+        assert o2.opacity == 0.4
+
+        # Linear field (emissive): alpha dropped silently, no opacity lift
+        o3 = CustomPbrOverrides(emissive=CustomColor(0.1, 0.2, 0.3, 0.9))
+        assert o3.emissive == (0.1, 0.2, 0.3)
+        assert o3.opacity is None
+
+    def test_color_to_tuple_subclass_preserves_standard_forms(self):
+        """A subclass override that handles its custom type must still pass
+        through standard forms (string / tuple / list) so existing call
+        sites keep working unchanged."""
+        from threejs_materials import PbrOverrides
+
+        class CustomPbrOverrides(PbrOverrides):
+            @staticmethod
+            def _color_to_tuple(c):
+                # Subclass passes everything through — same as base default
+                return c
+
+        o = CustomPbrOverrides(color="#ff0000")
+        assert o.color == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+
 
 class TestTextureTransform:
     def test_default_is_identity(self):
@@ -1069,6 +1151,47 @@ class TestInterpolateColor:
         })
         _, _, _, a = mat.interpolate_color()
         assert a == 0.6
+
+    def test_override_color_no_texture_returns_override(self):
+        """Without a color texture, override_color is the result directly."""
+        mat = PbrProperties.from_dict({
+            **_sample_data(),
+            "values": {"color": [1.0, 0.0, 0.0]},  # red, ignored under override
+        })
+        r, g, b, _ = mat.interpolate_color(override_color="#0000ff")
+        assert (r, g, b) == pytest.approx((0.0, 0.0, 1.0), abs=1e-3)
+
+    def test_override_color_with_texture_multiplies_in_linear(self):
+        """texture_avg × override (linear), then sRGB-encoded for output."""
+        from threejs_materials.utils import _linear_to_srgb, _srgb_to_linear
+        from PIL import Image as PILImage
+        import io
+        import base64
+
+        # Solid mid-gray color texture (sRGB 0x80 → linear ~0.216)
+        img = PILImage.new("RGB", (4, 4), (0x80, 0x80, 0x80))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        tex = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+        mat = PbrProperties.from_dict({
+            **_sample_data(),
+            "values": {},
+            "textures": {"color": tex},
+        })
+        # Override = (0.5, 0.5, 0.5) sRGB → linear ~0.216
+        # Texture linear ~0.216, multiplied → ~0.0466 linear → sRGB ~0.235
+        r, g, b, _ = mat.interpolate_color(override_color=(0.5, 0.5, 0.5))
+        expected = _linear_to_srgb(_srgb_to_linear(0.5020) * _srgb_to_linear(0.5020))
+        assert (r, g, b) == pytest.approx((expected, expected, expected), abs=1e-2)
+
+    def test_override_color_none_preserves_existing_behavior(self):
+        """Default override_color=None: same result as no argument."""
+        mat = PbrProperties.from_dict({
+            **_sample_data(),
+            "values": {"color": [0.7, 0.3, 0.1]},
+        })
+        assert mat.interpolate_color() == mat.interpolate_color(override_color=None)
 
 
 class TestClearCache:
