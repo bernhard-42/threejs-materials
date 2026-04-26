@@ -472,7 +472,11 @@ class TestInjectMaterialsRoundTrip:
         green = next(m for m in result.materials if m.name == "green_plastic")
 
         # --- Red metal: values ---
-        assert red.pbrMetallicRoughness.baseColorFactor[:3] == pytest.approx([0.8, 0.1, 0.1], abs=0.01)
+        # values.color is sRGB-stored; baseColorFactor is linear per glTF spec.
+        # Conversion happens at the gltf.py write boundary.
+        from threejs_materials.utils import _srgb_to_linear
+        expected_linear = [_srgb_to_linear(c) for c in [0.8, 0.1, 0.1]]
+        assert red.pbrMetallicRoughness.baseColorFactor[:3] == pytest.approx(expected_linear, abs=0.01)
         assert red.pbrMetallicRoughness.metallicFactor == pytest.approx(1.0)
         assert red.pbrMetallicRoughness.roughnessFactor == pytest.approx(1.0)
 
@@ -668,8 +672,13 @@ class TestAlwaysBakeProcedural:
 
         color = properties.get("color", {}).get("value")
         assert color is not None, "color must be present after baking"
-        assert color[0] > 0.9, f"expected brass red ~0.95, got {color[0]}"
-        assert color[2] < 0.5, f"expected brass blue ~0.37, got {color[2]}"
+        # values.color is sRGB-stored. Linear input (0.95, 0.79, 0.37) → sRGB
+        # ~(0.978, 0.901, 0.642). Verify the brass shape: red & green high,
+        # blue meaningfully lower (gap ≥ 0.2 in sRGB).
+        assert color[0] > 0.9, f"expected brass red ~0.98, got {color[0]}"
+        assert color[0] - color[2] > 0.2, (
+            f"expected brass red >> blue, got red={color[0]} blue={color[2]}"
+        )
 
 
 # ---------------------------------------------------------------------------

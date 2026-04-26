@@ -655,7 +655,7 @@ The `normalize_uvs` flag is serialized in `to_dict()` as `"normalizeUvs": false`
   object.color = wood.interpolate_color()   # (r, g, b, a) sRGB preview
   ```
 
-  When the material has a color texture, the texture is decoded and its average is used directly (requires `Pillow`); the scalar `values.color` is ignored in that case — it represents a physically-linear multiplier whose pre-tone-mapping effect makes the preview darker than the on-screen render. When no texture is present, `values.color` (linear RGB) is converted to sRGB. Transmission and opacity are mapped to the alpha channel so glass-like materials appear semi-transparent.
+  When the material has a color texture, the texture is decoded and its average (linear) is gamma-encoded to sRGB for output (requires `Pillow`); the scalar `values.color` is ignored in that case — including it produces a pre-tone-mapping color visibly darker than the on-screen render. When no texture is present, `values.color` (sRGB-stored — see "Color space convention" below) is returned directly. Transmission and opacity are mapped to the alpha channel so glass-like materials appear semi-transparent.
 
 - `encode_texture_base64(file_path) -> str`
 
@@ -749,7 +749,12 @@ Alternatively, when injecting materials into an existing glTF file (e.g. from bu
 
 ### Consumer notes
 
-- **Color space**: Textures include a `colorSpace` field when available. Three.js expects color textures (baseColor, emissive, sheenColor, specularColor) in **sRGB** and data textures (roughness, metalness, normal, AO, displacement) in **linear**. Set `texture.colorSpace` accordingly.
+- **Color space convention** (asymmetric — both for textures and scalars):
+  - **Textures**: include a `colorSpace` field when available. Three.js expects color textures (baseColor, emissive, sheenColor, specularColor) in **sRGB** and data textures (roughness, metalness, normal, AO, displacement) in **linear**. Set `texture.colorSpace` accordingly.
+  - **Scalar `values.color`**: stored as **sRGB byte ratios** in [0, 1]. Three.js renders it via `setRGB(r, g, b, SRGBColorSpace)` (the viewer linearizes internally). A numeric tuple like `(0.5, 0.5, 0.5)` means perceptual midgray. Hex/named strings are sRGB at source.
+  - **Scalar `values.emissive` / `sheen_color` / `specular_color` / `attenuation_color`**: stored as **linear RGB** in [0, 1]. Matches the glTF *Factor spec and Three.js's bare `new THREE.Color(r, g, b)` constructor convention. A numeric tuple `(0.5, 0.5, 0.5)` here means linear midgray (renders as ~73% sRGB perceptually). Hex strings on these fields are gamma-decoded.
+  - glTF export converts `values.color` sRGB→linear at the boundary (`baseColorFactor` is linear per spec); the other color fields are passed through unchanged (already linear). `from_gltf` does the inverse.
+  - **Client-facing APIs** (`override()`, `create()`, `from_pymat()`, `PbrOverrides`) accept the same per-field convention. Numeric tuples for `color` are sRGB; numeric tuples for `emissive` / `sheen_color` / `specular_color` / `attenuation_color` are linear. Hex/CSS strings are always sRGB at source and get gamma-decoded only for the linear-stored fields. A 4th-element alpha (or `#rrggbbaa`) on `color` lifts into the separate `opacity` field — explicit `opacity=` wins.
 - **Normal maps**: Baked using the OpenGL convention (Y-up), matching Three.js and glTF expectations.
 - **Scalar x texture**: When both `value` and `texture` are present, Three.js multiplies them. The library sets scalars to `1.0` (neutral) when a texture is present so the texture controls fully.
 - **glTF packed metallicRoughness**: When imported from glTF, the packed `metallicRoughnessTexture` is assigned to both `metalness` and `roughness` as the same texture. Three.js reads G=roughness and B=metalness from the correct channels automatically.

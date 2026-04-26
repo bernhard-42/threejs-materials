@@ -253,9 +253,34 @@ class TestCreate:
         assert mat.maps.clearcoat == "tex.png"
 
     def test_color_string(self):
-        """Color strings are sRGB-decoded to linear (matching Three.js)."""
+        """Color strings are sRGB and stored as sRGB byte ratios.
+        three-cad-viewer's setRGB(SRGBColorSpace) handles the linearization."""
         mat = PbrProperties.create(id="t", color="#ff0000")
         assert mat.values.color == pytest.approx([1.0, 0.0, 0.0], abs=1e-3)
+
+    def test_color_hex_midgray_stored_as_srgb_byte_ratio(self):
+        """sRGB 0x80 → 0.502 byte ratio (no gamma decode at this layer)."""
+        mat = PbrProperties.create(id="t", color="#808080")
+        assert mat.values.color == pytest.approx([0.5020, 0.5020, 0.5020], abs=1e-3)
+
+    def test_color_4tuple_lifts_opacity(self):
+        """A 4-tuple color sets opacity from the alpha component."""
+        mat = PbrProperties.create(id="t", color=(0.5, 0.6, 0.7, 0.4))
+        assert mat.values.color == [0.5, 0.6, 0.7]
+        assert mat.values.opacity == 0.4
+
+    def test_color_hex_with_alpha_lifts_opacity(self):
+        mat = PbrProperties.create(id="t", color="#ff000080")
+        assert mat.values.color == pytest.approx([1.0, 0.0, 0.0], abs=1e-3)
+        assert mat.values.opacity == pytest.approx(0.5019, abs=1e-3)
+
+    def test_explicit_opacity_wins_over_color_alpha(self):
+        """Passing both ``opacity`` and an alpha-bearing color: explicit wins."""
+        mat = PbrProperties.create(
+            id="t", color=(0.5, 0.6, 0.7, 0.4), opacity=0.9,
+        )
+        assert mat.values.color == [0.5, 0.6, 0.7]
+        assert mat.values.opacity == 0.9
 
     def test_from_dict_and_create_converge(self, tmp_path, tiny_png):
         """Same inputs via either factory produce equivalent output."""
@@ -300,6 +325,56 @@ class TestCreate:
                 color_map=str(d1 / "tex.png"),
                 roughness_map=str(d2 / "tex.png"),
             )
+
+
+# ---------------------------------------------------------------------------
+# PbrProperties.from_pymat
+# ---------------------------------------------------------------------------
+
+
+class TestFromPymat:
+    def test_hex_color_stored_as_srgb(self):
+        """Hex colors are sRGB by definition; values.color stores sRGB byte
+        ratios so three-cad-viewer's setRGB(SRGBColorSpace) renders correctly."""
+        mat = PbrProperties.from_pymat({"color": "#ff0000"})
+        assert mat.values.color == pytest.approx([1.0, 0.0, 0.0], abs=1e-3)
+
+    def test_hex_midgray_stored_as_srgb(self):
+        """sRGB 0x80 → stored as 0.502 (byte ratio). The viewer's
+        setRGB(SRGBColorSpace) gamma-decodes to ~0.216 linear at render."""
+        mat = PbrProperties.from_pymat({"color": "#808080"})
+        assert mat.values.color == pytest.approx([0.5020, 0.5020, 0.5020], abs=1e-3)
+
+    def test_int_color_treated_as_hex(self):
+        mat = PbrProperties.from_pymat({"color": 0xff0000})
+        assert mat.values.color == pytest.approx([1.0, 0.0, 0.0], abs=1e-3)
+
+    def test_4tuple_color_lifts_opacity(self):
+        mat = PbrProperties.from_pymat({"color": (0.5, 0.6, 0.7, 0.4)})
+        assert mat.values.color == [0.5, 0.6, 0.7]
+        assert mat.values.opacity == 0.4
+
+    def test_explicit_pbr_opacity_wins_over_color_alpha(self):
+        mat = PbrProperties.from_pymat(
+            {"color": (0.5, 0.6, 0.7, 0.4), "opacity": 0.9}
+        )
+        assert mat.values.color == [0.5, 0.6, 0.7]
+        assert mat.values.opacity == 0.9
+
+    def test_overrides_color_normalized(self):
+        mat = PbrProperties.from_pymat(
+            {"color": "#000000"},
+            overrides={"color": "#ff0000"},
+        )
+        assert mat.values.color == pytest.approx([1.0, 0.0, 0.0], abs=1e-3)
+
+    def test_overrides_color_with_alpha_lifts_opacity(self):
+        mat = PbrProperties.from_pymat(
+            {"color": "#000000"},
+            overrides={"color": (0.2, 0.3, 0.4, 0.5)},
+        )
+        assert mat.values.color == [0.2, 0.3, 0.4]
+        assert mat.values.opacity == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +460,38 @@ class TestOverride:
         new = mat.override(color=(0.5, 0.0, 0.0))
         assert new.values.color == [0.5, 0.0, 0.0]
         assert new.maps.color is None
+
+    def test_color_override_hex_stored_as_srgb(self):
+        mat = PbrProperties.from_dict(_sample_data())
+        new = mat.override(color="#ff0000")
+        assert new.values.color == pytest.approx([1.0, 0.0, 0.0], abs=1e-3)
+
+    def test_color_override_hex_midgray_stored_as_srgb_byte_ratio(self):
+        """sRGB 0x80 → 0.502 byte ratio (regression: previously gamma-decoded
+        to 0.216 linear, which broke rendering in three-cad-viewer's
+        setRGB(SRGBColorSpace) path)."""
+        mat = PbrProperties.from_dict(_sample_data())
+        new = mat.override(color="#808080")
+        assert new.values.color == pytest.approx([0.5020, 0.5020, 0.5020], abs=1e-3)
+
+    def test_color_override_4tuple_lifts_opacity(self):
+        mat = PbrProperties.from_dict(_sample_data())
+        new = mat.override(color=(0.5, 0.6, 0.7, 0.4))
+        assert new.values.color == [0.5, 0.6, 0.7]
+        assert new.values.opacity == 0.4
+
+    def test_color_override_hex_with_alpha_lifts_opacity(self):
+        mat = PbrProperties.from_dict(_sample_data())
+        new = mat.override(color="#ff000080")
+        assert new.values.color == pytest.approx([1.0, 0.0, 0.0], abs=1e-3)
+        assert new.values.opacity == pytest.approx(0.5019, abs=1e-3)
+
+    def test_color_override_explicit_opacity_wins(self):
+        """When ``opacity=`` is also passed, it overrides any color alpha."""
+        mat = PbrProperties.from_dict(_sample_data())
+        new = mat.override(color=(0.5, 0.6, 0.7, 0.4), opacity=0.9)
+        assert new.values.color == [0.5, 0.6, 0.7]
+        assert new.values.opacity == 0.9
 
     def test_override_all_pbr_value_fields(self):
         """Every field in PbrValues should be overridable via override().
@@ -644,8 +751,324 @@ class TestOverride:
 
 
 # ---------------------------------------------------------------------------
+# PbrOverrides / TextureTransform — typed config objects
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeColor:
+    """``utils._normalize_color`` produces **linear** RGB output. Used for
+    color fields that Three.js consumes in linear space — emissive,
+    sheen_color, specular_color, attenuation_color."""
+
+    def test_hex_6chars_decodes_srgb_to_linear(self):
+        from threejs_materials.utils import _normalize_color
+        rgb, alpha = _normalize_color("#ff0000")
+        # Pure red sRGB (0xff) → 1.0 linear
+        assert rgb == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+        assert alpha is None
+
+    def test_hex_6chars_midgray_linearizes(self):
+        """sRGB 0x80 (≈0.502) → linear ≈0.216 (gamma-decoded, not byte ratio)."""
+        from threejs_materials.utils import _normalize_color
+        rgb, alpha = _normalize_color("#808080")
+        assert rgb == pytest.approx((0.2159, 0.2159, 0.2159), abs=1e-3)
+        assert alpha is None
+
+    def test_hex_8chars_lifts_alpha(self):
+        from threejs_materials.utils import _normalize_color
+        rgb, alpha = _normalize_color("#80808080")
+        assert rgb == pytest.approx((0.2159, 0.2159, 0.2159), abs=1e-3)
+        assert alpha == pytest.approx(0.5019, abs=1e-3)  # 0x80/255
+
+    def test_named_color(self):
+        from threejs_materials.utils import _normalize_color
+        rgb, alpha = _normalize_color("red")
+        assert rgb == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+        assert alpha is None
+
+    def test_three_tuple_passthrough(self):
+        """Numeric tuples for linear-output normalizer: passthrough (already linear)."""
+        from threejs_materials.utils import _normalize_color
+        rgb, alpha = _normalize_color((0.5, 0.5, 0.5))
+        assert rgb == (0.5, 0.5, 0.5)
+        assert alpha is None
+
+    def test_three_list_passthrough(self):
+        from threejs_materials.utils import _normalize_color
+        rgb, alpha = _normalize_color([0.1, 0.2, 0.3])
+        assert rgb == (0.1, 0.2, 0.3)
+        assert alpha is None
+
+    def test_four_tuple_splits_alpha(self):
+        from threejs_materials.utils import _normalize_color
+        rgb, alpha = _normalize_color((0.1, 0.2, 0.3, 0.7))
+        assert rgb == (0.1, 0.2, 0.3)
+        assert alpha == 0.7
+
+    def test_four_list_splits_alpha(self):
+        from threejs_materials.utils import _normalize_color
+        rgb, alpha = _normalize_color([0.1, 0.2, 0.3, 0.7])
+        assert rgb == (0.1, 0.2, 0.3)
+        assert alpha == 0.7
+
+    def test_wrong_tuple_length_raises(self):
+        from threejs_materials.utils import _normalize_color
+        with pytest.raises(ValueError, match="3 or 4 elements"):
+            _normalize_color((0.1, 0.2))
+        with pytest.raises(ValueError, match="3 or 4 elements"):
+            _normalize_color((0.1, 0.2, 0.3, 0.4, 0.5))
+
+    def test_unsupported_type_raises(self):
+        from threejs_materials.utils import _normalize_color
+        with pytest.raises(TypeError, match="Unsupported color type"):
+            _normalize_color(42)
+
+
+class TestNormalizeSrgbColor:
+    """``utils._normalize_srgb_color`` produces **sRGB byte ratio** output.
+    Used for ``values.color`` which Three.js consumes via setRGB(SRGBColorSpace)."""
+
+    def test_hex_6chars_stored_as_srgb(self):
+        from threejs_materials.utils import _normalize_srgb_color
+        rgb, alpha = _normalize_srgb_color("#ff0000")
+        assert rgb == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+        assert alpha is None
+
+    def test_hex_6chars_midgray_no_gamma_decode(self):
+        """sRGB 0x80 → stored as 0.502 (byte ratio, no gamma decode).
+        The viewer's setRGB(SRGBColorSpace) handles linearization."""
+        from threejs_materials.utils import _normalize_srgb_color
+        rgb, alpha = _normalize_srgb_color("#808080")
+        assert rgb == pytest.approx((0.5020, 0.5020, 0.5020), abs=1e-3)
+        assert alpha is None
+
+    def test_hex_8chars_lifts_alpha(self):
+        from threejs_materials.utils import _normalize_srgb_color
+        rgb, alpha = _normalize_srgb_color("#80808080")
+        assert rgb == pytest.approx((0.5020, 0.5020, 0.5020), abs=1e-3)
+        assert alpha == pytest.approx(0.5019, abs=1e-3)
+
+    def test_named_color(self):
+        from threejs_materials.utils import _normalize_srgb_color
+        rgb, alpha = _normalize_srgb_color("red")
+        assert rgb == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+        assert alpha is None
+
+    def test_three_tuple_passthrough(self):
+        """Numeric tuples for sRGB normalizer: passthrough (already sRGB by convention)."""
+        from threejs_materials.utils import _normalize_srgb_color
+        rgb, alpha = _normalize_srgb_color((0.5, 0.5, 0.5))
+        assert rgb == (0.5, 0.5, 0.5)
+        assert alpha is None
+
+    def test_four_tuple_splits_alpha(self):
+        from threejs_materials.utils import _normalize_srgb_color
+        rgb, alpha = _normalize_srgb_color((0.1, 0.2, 0.3, 0.7))
+        assert rgb == (0.1, 0.2, 0.3)
+        assert alpha == 0.7
+
+    def test_wrong_tuple_length_raises(self):
+        from threejs_materials.utils import _normalize_srgb_color
+        with pytest.raises(ValueError, match="3 or 4 elements"):
+            _normalize_srgb_color((0.1, 0.2))
+
+    def test_unsupported_type_raises(self):
+        from threejs_materials.utils import _normalize_srgb_color
+        with pytest.raises(TypeError, match="Unsupported color type"):
+            _normalize_srgb_color(42)
+
+    def test_round_trip_with_normalize_color_diverges_at_midtone(self):
+        """The two normalizers must produce different outputs for non-extreme
+        values — proves the asymmetry is real, not just renamed."""
+        from threejs_materials.utils import _normalize_color, _normalize_srgb_color
+        srgb, _ = _normalize_srgb_color("#808080")
+        linear, _ = _normalize_color("#808080")
+        assert srgb[0] == pytest.approx(0.5020, abs=1e-3)
+        assert linear[0] == pytest.approx(0.2159, abs=1e-3)
+
+
+class TestPbrOverrides:
+    def test_default_is_all_none(self):
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides()
+        assert o.color is None
+        assert o.roughness is None
+        assert o.metalness is None
+
+    def test_as_kwargs_filters_none(self):
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color=(1.0, 0.0, 0.0), roughness=0.4)
+        kw = o.as_kwargs()
+        assert kw == {"color": (1.0, 0.0, 0.0), "roughness": 0.4}
+        # No None entries — only fields the caller actually set.
+        assert "metalness" not in kw
+
+    def test_normalizes_hex_color_to_srgb_3tuple(self):
+        """``color`` is sRGB-stored — hex passes through as byte ratios."""
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color="#ff0000")
+        assert o.color == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+        assert o.opacity is None
+
+    def test_normalizes_midgray_hex_to_srgb_byte_ratio(self):
+        """``color`` is sRGB-stored — 0x80 → 0.502 byte ratio (no gamma decode)."""
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color="#808080")
+        assert o.color == pytest.approx((0.5020, 0.5020, 0.5020), abs=1e-3)
+
+    def test_normalizes_hex_with_alpha_lifts_opacity(self):
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color="#ff000080")
+        assert o.color == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+        assert o.opacity == pytest.approx(0.5019, abs=1e-3)
+
+    def test_4tuple_color_lifts_opacity(self):
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color=(0.5, 0.6, 0.7, 0.4))
+        assert o.color == (0.5, 0.6, 0.7)
+        assert o.opacity == 0.4
+
+    def test_explicit_opacity_wins_over_color_alpha(self):
+        """When both ``opacity=`` and an alpha-bearing color are passed,
+        the explicit ``opacity`` field is respected."""
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color=(0.5, 0.6, 0.7, 0.4), opacity=0.9)
+        assert o.color == (0.5, 0.6, 0.7)
+        assert o.opacity == 0.9
+
+    def test_3tuple_color_leaves_opacity_unset(self):
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color=(0.5, 0.6, 0.7))
+        assert o.color == (0.5, 0.6, 0.7)
+        assert o.opacity is None
+
+    def test_other_color_fields_normalized(self):
+        """Non-``color`` color-typed fields are also normalized (but their
+        alpha is dropped — only ``color`` lifts to ``opacity``)."""
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(
+            emissive="#ff0000",
+            sheen_color=(0.1, 0.2, 0.3),
+            specular_color="#808080",
+            attenuation_color=(0.5, 0.5, 0.5, 0.7),  # alpha dropped silently
+        )
+        assert o.emissive == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+        assert o.sheen_color == (0.1, 0.2, 0.3)
+        assert o.specular_color == pytest.approx((0.2159, 0.2159, 0.2159), abs=1e-3)
+        assert o.attenuation_color == (0.5, 0.5, 0.5)
+        # 4-tuple alpha on non-color fields does NOT lift to opacity
+        assert o.opacity is None
+
+    def test_as_kwargs_drives_override(self):
+        """End-to-end: client constructs PbrOverrides → unpacks into
+        mat.override(**...). Must produce the same result as calling
+        override() with the same kwargs directly."""
+        from threejs_materials import PbrOverrides
+        mat = PbrProperties.from_dict(_sample_data())
+        overrides = PbrOverrides(color=(0.85, 0.10, 0.05), roughness=0.4)
+
+        from_dataclass = mat.override(**overrides.as_kwargs())
+        from_kwargs = mat.override(color=(0.85, 0.10, 0.05), roughness=0.4)
+
+        # Identical state: id, values, all the same
+        assert from_dataclass.id == from_kwargs.id
+        assert from_dataclass.values.color == from_kwargs.values.color
+        assert from_dataclass.values.roughness == from_kwargs.values.roughness
+
+    def test_frozen_and_hashable(self):
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(color=(1, 0, 0))
+        # Frozen → can't mutate
+        with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
+            o.color = (0, 1, 0)
+        # Hashable → can be used as dict keys / in sets
+        assert hash(o) is not None
+
+    def test_repr_hides_none_fields(self):
+        from threejs_materials import PbrOverrides
+        o = PbrOverrides(roughness=0.4)
+        r = repr(o)
+        assert "roughness=0.4" in r
+        assert "color" not in r  # None fields hidden
+        assert "metalness" not in r
+
+
+class TestTextureTransform:
+    def test_default_is_identity(self):
+        from threejs_materials import TextureTransform
+        t = TextureTransform()
+        assert t.scale == (1.0, 1.0)
+        assert t.fixed_size is True
+
+    def test_as_kwargs_drives_scale(self):
+        """End-to-end: client constructs TextureTransform → unpacks into
+        mat.scale(**...). Must produce same result as direct scale() call."""
+        from threejs_materials import TextureTransform
+        mat = PbrProperties.from_dict(_sample_data())
+        transform = TextureTransform(scale=(2.0, 2.0), fixed_size=True)
+
+        from_dataclass = mat.scale(**transform.as_kwargs())
+        from_kwargs = mat.scale(2.0, 2.0, fixed=True)
+
+        assert from_dataclass.id == from_kwargs.id
+        assert from_dataclass.texture_repeat == from_kwargs.texture_repeat
+        assert from_dataclass.normalize_uvs == from_kwargs.normalize_uvs
+
+    def test_frozen_and_hashable(self):
+        from threejs_materials import TextureTransform
+        t = TextureTransform(scale=(2.0, 2.0))
+        with pytest.raises(Exception):
+            t.scale = (4.0, 4.0)
+        assert hash(t) is not None
+
+
+# ---------------------------------------------------------------------------
 # clear_cache / list_cache (in sources)
 # ---------------------------------------------------------------------------
+# interpolate_color — display-space preview color
+# ---------------------------------------------------------------------------
+
+
+class TestInterpolateColor:
+    """Returns a perceptually-representative sRGB color + alpha for CAD-mode
+    preview. Inputs in different spaces converge on sRGB output."""
+
+    def test_string_color_passthrough(self):
+        """values.color = "#ff0000" → sRGB (1, 0, 0) — string is sRGB at source."""
+        mat = PbrProperties.from_dict({
+            **_sample_data(),
+            "values": {"color": "#ff0000"},
+        })
+        r, g, b, a = mat.interpolate_color()
+        assert (r, g, b) == pytest.approx((1.0, 0.0, 0.0), abs=1e-3)
+        assert a == 1.0
+
+    def test_list_color_passthrough(self):
+        """values.color stored as list is already sRGB — no conversion."""
+        mat = PbrProperties.from_dict({
+            **_sample_data(),
+            "values": {"color": [0.5, 0.5, 0.5]},
+        })
+        r, g, b, _ = mat.interpolate_color()
+        # No gamma conversion — input was already sRGB
+        assert (r, g, b) == pytest.approx((0.5, 0.5, 0.5), abs=1e-3)
+
+    def test_no_color_fallback_is_srgb_midgray(self):
+        """Fallback when nothing is set: sRGB perceptual midgray (0.5, 0.5, 0.5)."""
+        data = _sample_data()
+        data["values"] = {}
+        data["textures"] = {}
+        mat = PbrProperties.from_dict(data)
+        r, g, b, _ = mat.interpolate_color()
+        assert (r, g, b) == (0.5, 0.5, 0.5)
+
+    def test_opacity_passes_through(self):
+        mat = PbrProperties.from_dict({
+            **_sample_data(),
+            "values": {"color": [1.0, 0.0, 0.0], "opacity": 0.6},
+        })
+        _, _, _, a = mat.interpolate_color()
+        assert a == 0.6
 
 
 class TestClearCache:
@@ -741,14 +1164,18 @@ class TestToGltf:
         assert self._mat(g).name == "Test Material"
 
     def test_basic_pbr_values(self):
+        """values.color is sRGB-stored; baseColorFactor on the wire is linear
+        per glTF spec — conversion happens at the gltf.py boundary."""
+        from threejs_materials.utils import _srgb_to_linear
         data = _sample_data(values={
-            "color": [0.8, 0.2, 0.1],
+            "color": [0.8, 0.2, 0.1],  # sRGB
             "metalness": 0.9,
             "roughness": 0.4,
         })
         m = self._mat(PbrProperties.from_dict(data).to_gltf())
         pbr = m.pbrMetallicRoughness
-        assert pbr.baseColorFactor == [0.8, 0.2, 0.1, 1.0]
+        expected_linear = [_srgb_to_linear(c) for c in [0.8, 0.2, 0.1]] + [1.0]
+        assert pbr.baseColorFactor == pytest.approx(expected_linear, abs=1e-6)
         assert pbr.metallicFactor == 0.9
         assert pbr.roughnessFactor == 0.4
 

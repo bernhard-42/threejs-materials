@@ -14,7 +14,7 @@ from sys import platform
 
 from PIL import Image
 
-from threejs_materials.utils import ensure_materialx, ensure_openexr
+from threejs_materials.utils import ensure_materialx, ensure_openexr, _linear_to_srgb
 
 log = logging.getLogger(__name__)
 
@@ -388,6 +388,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         # When a texture exists, set scalar to neutral so texture controls fully.
         # The baker's output already reflects the intended diffuse brightness;
         # applying `base` again would double-darken the result.
+        # MaterialX scalar values are linear; values.color is sRGB-stored
+        # (matches three-cad-viewer's setRGB(SRGBColorSpace)).
         base = p.get("base", 1.0)
         base_color = p.get("base_color", [0.8, 0.8, 0.8])
         metalness_val = p.get("metalness", 0.0)
@@ -398,12 +400,13 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
             # but applying it here darkens metals too much — the
             # standard_surface specular layer compensates in ways that glTF
             # pbrMetallicRoughness cannot replicate.  Use neutral [1,1,1].
+            # [1,1,1] is invariant under linear↔sRGB.
             if metalness_val >= 1.0 or has_tex("metalness"):
                 val("color", [1.0, 1.0, 1.0])
             else:
-                val("color", [base, base, base])
+                val("color", [_linear_to_srgb(base)] * 3)
         else:
-            val("color", [c * base for c in base_color])
+            val("color", [_linear_to_srgb(c * base) for c in base_color])
         tex("color", "base_color")
 
         val("metalness", 1.0 if has_tex("metalness") else p.get("metalness", 0.0))
@@ -499,7 +502,13 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
 
     elif model == "gltf_pbr":
         # Three.js multiplies scalar × texture — set scalar to neutral when texture exists.
-        val("color", [1.0, 1.0, 1.0] if has_tex("base_color") else p.get("base_color", [1.0, 1.0, 1.0]))
+        # MaterialX base_color is linear; values.color is sRGB-stored.
+        # [1,1,1] is invariant under linear↔sRGB conversion.
+        if has_tex("base_color"):
+            val("color", [1.0, 1.0, 1.0])
+        else:
+            base_color = p.get("base_color", [1.0, 1.0, 1.0])
+            val("color", [_linear_to_srgb(c) for c in base_color])
         tex("color", "base_color")
 
         has_mr_tex = has_tex("metallic_roughness")
@@ -633,12 +642,14 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
         # into the baked `base_color` texture. Emit `base_weight` as the
         # scalar so Three.js reproduces the MaterialX shading math
         # `base_weight × base_color` at render time. See materialx_baker.md.
+        # MaterialX values are linear; values.color is sRGB-stored
+        # (matches three-cad-viewer's setRGB(SRGBColorSpace)).
         base_weight = p.get("base_weight", 1.0)
         base_color = p.get("base_color", [0.8, 0.8, 0.8])
         if has_tex("base_color"):
-            val("color", [base_weight, base_weight, base_weight])
+            val("color", [_linear_to_srgb(base_weight)] * 3)
         else:
-            val("color", [c * base_weight for c in base_color])
+            val("color", [_linear_to_srgb(c * base_weight) for c in base_color])
         tex("color", "base_color")
 
         val("metalness", 1.0 if has_tex("base_metalness") else p.get("base_metalness", 0.0))

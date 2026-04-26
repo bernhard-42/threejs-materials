@@ -333,6 +333,52 @@ class TestRoundTrip:
         assert m1.pbrMetallicRoughness.roughnessFactor == m2.pbrMetallicRoughness.roughnessFactor
         assert m1.extensions == m2.extensions
 
+    def test_color_midgray_round_trips_losslessly(self):
+        """sRGB midgray exercises the gamma curve in both directions —
+        catches sign or factor errors that pass on extreme values like (1,0,0)."""
+        mat = _sample(values={"color": [0.5020, 0.5020, 0.5020]})  # sRGB 0x80
+        g = mat.to_gltf()
+        imported = next(iter(PbrProperties.from_gltf(g).values()))
+        assert imported.values.color == pytest.approx([0.5020, 0.5020, 0.5020], abs=1e-3)
+
+    def test_basecolorfactor_is_linear_on_wire(self):
+        """Explicit assertion that the boundary conversion happens: input
+        sRGB → wire linear (per glTF spec)."""
+        from threejs_materials.utils import _srgb_to_linear
+        mat = _sample(values={"color": [0.5, 0.7, 0.3]})  # sRGB
+        g = mat.to_gltf()
+        bcf = g.materials[0].pbrMetallicRoughness.baseColorFactor
+        expected = [_srgb_to_linear(c) for c in [0.5, 0.7, 0.3]]
+        assert bcf[:3] == pytest.approx(expected, abs=1e-6)
+
+
+class TestStringColorExport:
+    """Regression tests for the pre-existing string-color silent-drop bug
+    in _build_pbr (now fixed: strings are normalized before linear conversion)."""
+
+    def test_hex_string_color_exports(self):
+        """`values.color = "#ff8000"` previously fell through the
+        isinstance-list branch and exported as `[1.0, 1.0, 1.0]` — color lost.
+        Now: normalized to sRGB then sRGB→linear at the boundary."""
+        from threejs_materials.utils import _srgb_to_linear
+        mat = _sample(values={"color": "#ff8000"})
+        g = mat.to_gltf()
+        bcf = g.materials[0].pbrMetallicRoughness.baseColorFactor
+        # "#ff8000" sRGB byte ratios → (1.0, 0.502, 0.0) → linear via _srgb_to_linear
+        expected = [
+            _srgb_to_linear(1.0),
+            _srgb_to_linear(0x80 / 255.0),
+            _srgb_to_linear(0.0),
+        ]
+        assert bcf[:3] == pytest.approx(expected, abs=1e-3)
+
+    def test_named_color_exports(self):
+        from threejs_materials.utils import _srgb_to_linear
+        mat = _sample(values={"color": "red"})
+        g = mat.to_gltf()
+        bcf = g.materials[0].pbrMetallicRoughness.baseColorFactor
+        assert bcf[:3] == pytest.approx([_srgb_to_linear(1.0), 0.0, 0.0], abs=1e-3)
+
 
 # ---------------------------------------------------------------------------
 # save_gltf overwrite handling

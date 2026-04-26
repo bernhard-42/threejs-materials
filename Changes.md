@@ -1,10 +1,31 @@
 # v1.1.0
 
+## Breaking changes
+
+- **`PbrProperties.values.color` is now sRGB-stored** (was linear). Matches three-cad-viewer's `setRGB(r, g, b, SRGBColorSpace)` consumption — the viewer linearizes internally, so storing sRGB byte ratios lets a numeric input like `(0.5, 0.5, 0.5)` mean perceptual midgray. glTF spec compliance is preserved by an `_srgb_to_linear` conversion at the `to_gltf()`/`from_gltf()` boundary (`baseColorFactor` remains linear on the wire). The `emissive`, `sheen_color`, `specular_color`, `attenuation_color` fields **remain linear** (matching glTF *Factor spec and Three.js's bare `new THREE.Color(r, g, b)` constructor convention).
+
+  User impact: `mat.override(color=(0.2, 0.4, 0.6))` will render brighter than before with the same numeric input — same input now interpreted as sRGB. Hex strings like `"#ff8000"` are unaffected (sRGB at source).
+
+- **Cache migration required.** Two reasons: (a) the cache directory moved during v1.1 development from `~/.materialx-cache/` to a `platformdirs`-based location (exposed as `threejs_materials.CACHE_DIR`), and (b) the sRGB-color convention above invalidates any cached materials produced by an earlier v1.1 prerelease.
+
+  To migrate:
+  1. Delete the legacy cache: `rm -rf ~/.materialx-cache/` (no longer used).
+  2. If you've used a v1.1 prerelease, also clear the new location:
+     ```python
+     from threejs_materials import clear_cache
+     clear_cache()
+     ```
+     (or `rm -rf "$(python -c 'from threejs_materials import CACHE_DIR; print(CACHE_DIR)')"`).
+
+  The cache repopulates on next access.
+
 ## Features
 
-- **`PbrProperties.from_pymat()`** — new factory that converts a Three.js-style PBR dict (with keys like `map`, `normalMap`, `roughnessMap`, `color_hex`) into a `PbrProperties`. Complements the existing `from_gltf`, `from_mtlx`, and `from_dict` factories.
+- **`PbrProperties.from_pymat()`** — new factory that converts a Three.js-style PBR dict (with keys like `map`, `normalMap`, `roughnessMap`, `color_hex`) into a `PbrProperties`. Numeric color tuples are interpreted as sRGB byte ratios (matches build123d's `Color` class output and three-cad-viewer's downstream consumption). Complements the existing `from_gltf`, `from_mtlx`, and `from_dict` factories.
 - **Full `override()` kwargs parity with `PbrValues`** — `override()` now accepts every scalar/color field on `PbrValues`. Previously missing: `transparent`, `alpha_test`, `specular_color`, `iridescence_ior`, `iridescence_thickness_range`, `dispersion`, `normal_scale`, `displacement_scale`, `side`.
-- **`_parse_color_string(color, as_linear=True)`** — utility gained an `as_linear` flag. Default `True` preserves the sRGB→linear decoding used for Three.js `color`; `False` returns raw `byte/255` ratios for display-space uses.
+- **`_parse_color_string(color, as_linear=True)`** — utility gained an `as_linear` flag. Default `True` keeps the sRGB→linear decoding used for legacy/internal flows; `False` returns raw `byte/255` ratios for display-space uses.
+- **Typed config dataclasses for clients: `PbrOverrides`, `TextureTransform`** — frozen dataclasses that mirror `override()` / `scale()` kwargs, exposed at the package root. Clients construct them once and pass via `mat.override(**ov.as_kwargs())` / `mat.scale(**t.as_kwargs())`. Hashable and shareable. `__post_init__` normalizes per-field convention (sRGB for `color`, linear for the others).
+- **Permissive `Color` type with per-field normalization** — `Color = str | tuple[float, ...] | list[float]` is the new public alias accepted by `override`, `create`, `from_pymat`, `PbrOverrides`. Accepts `"#rrggbb"`, `"#rrggbbaa"`, CSS names, 3-tuples, and 4-tuples. **String inputs are always sRGB**; numeric-tuple convention is field-dependent (sRGB for `color`, linear for `emissive`/`sheen_color`/`specular_color`/`attenuation_color`). The 4th element / `aa` byte on `color` is lifted into the separate `opacity` field (explicit `opacity=` wins). Backed by two helpers: `_normalize_color` (linear output) and `_normalize_srgb_color` (sRGB output).
 
 ## Behavior changes
 
@@ -22,6 +43,10 @@
 - **MaterialX TextureBaker IOR recovery** — MaterialX 1.39.x TextureBaker does not preserve graph-connected scalar shader inputs; it rewrites them to a placeholder `value="1"`. This silently broke 6 GPUOpen materials (Old Paint + the Marble family) whose `specular_IOR` is wired through a constant-valued nodegraph, producing `ior=1.0` in the cache instead of the authored 1.39–1.80. A narrowly-scoped pre-bake walker now evaluates `constant | dot | convert` chains for `specular_IOR` / `coat_IOR` / `thin_film_IOR` and restores the author's value over the baker's clobbered one.
 - **`open_pbr_surface.geometry_opacity` texture** — ambientCG Smear 005 (and similar decals) wired their opacity mask to `geometry_opacity`, but `convert.py` only read the scalar and silently dropped the texture. Now emitted as `maps.opacity` with `alphaTest=0.5`.
 - **`gltf_pbr.sheen_roughness` texture** — baked sheen_roughness graphs were dropped on the gltf_pbr path. Now wired through with the scalar promoted to `1.0` when the texture is present.
+- **`from_pymat` color handling consistent with `create`/`override`** — hex/named/numeric color inputs are now normalized through the same per-field path. Stored sRGB on `values.color` (matches three-cad-viewer's `setRGB(SRGBColorSpace)` consumption); see Breaking changes for the convention shift.
+- **`create(color=4-tuple)` no longer drops alpha** — previously the 4th element was silently truncated. Now lifted into `opacity` (explicit `opacity=` still wins). Hex with alpha (`"#rrggbbaa"`) lifts the same way.
+- **String colors no longer silently dropped on glTF export** — `values.color = "#ff8000"` previously fell through `_build_pbr`'s `isinstance(color, list)` check and exported as `[1.0, 1.0, 1.0]` (color lost). Now normalized before the linear conversion at the boundary, so all input forms (hex, name, list, tuple) survive export.
+- **glTF round-trip for color is lossless within float precision** — `to_gltf()` does sRGB→linear at `_build_pbr`; `from_gltf()` does linear→sRGB on read. Round-trip preserves the input value.
 
 ## Internals / refactor
 
@@ -29,7 +54,7 @@
 
 ## Tests
 
-- ~40 new tests added across `test_convert.py`, `test_library.py`, and `tests/test_sources_ambientcg.py` covering every fix and behavior change above. Full suite: 257 passing.
+- ~60 new tests across `test_convert.py`, `test_library.py`, `test_gltf.py`, and `tests/test_sources_ambientcg.py` covering every fix and behavior change above. Includes dedicated `TestNormalizeColor` (linear path) and `TestNormalizeSrgbColor` (sRGB path) classes, normalization tests on `PbrOverrides`/`create`/`override`/`from_pymat` covering each input form (hex 6/8, named, 3-tuple, 4-tuple) for both paths, explicit-opacity-wins precedence, glTF wire-format linearity assertion, midgray round-trip (catches sign/factor errors that pass on extremes like (1,0,0)), and `TestStringColorExport` for the string-color silent-drop regression. Full suite: **322 passing**.
 
 ## Docs
 
@@ -37,6 +62,8 @@
 - README Customization section gains a **Variant ids** subsection documenting the `{name}_{hash}` pattern on `override()` / `scale()`.
 - README `interpolate_color()` entry explains the new texture-only behavior (scalar ignored when texture is present, with reason).
 - README "New in v1.0.0" `create()` bullet expanded to note the pure-passthrough semantics.
+- README §"Consumer notes" gains a **Color space convention** subsection covering the asymmetric per-field convention (sRGB-stored `color`, linear-stored `emissive`/`sheen_color`/`specular_color`/`attenuation_color`), the `setRGB(SRGBColorSpace)` rationale, glTF boundary conversion in both directions, and the matching client-API contract for `override()` / `create()` / `from_pymat()` / `PbrOverrides` numeric-tuple inputs.
+- Public-API docstring contracts on `PbrValues` (field-level color-space note), `PbrProperties.from_dict` / `from_pymat` / `create` / `override` (per-method per-field convention), `PbrOverrides` class docstring (asymmetric normalization), and the `Color` type alias.
 
 # v1.0.4
 

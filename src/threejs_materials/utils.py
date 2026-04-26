@@ -230,3 +230,89 @@ def _parse_color_string(
             _srgb_to_linear(b / 255.0),
         )
     return (r / 255.0, g / 255.0, b / 255.0)
+
+
+def _normalize_color(c) -> tuple[tuple[float, float, float], float | None]:
+    """Normalize a permissive color value to **linear** ``((r, g, b), alpha | None)``.
+
+    Used for color fields that Three.js consumes in linear space — namely
+    ``emissive``, ``sheen_color``, ``specular_color``, ``attenuation_color``
+    — matching the glTF *Factor spec and Three.js's bare-constructor
+    ``new THREE.Color(r, g, b)`` semantics (working color space = linear).
+
+    For ``color`` (which Three.js reads via ``setRGB(SRGBColorSpace)`` and
+    therefore expects sRGB byte ratios), use ``_normalize_srgb_color``.
+
+    Accepted inputs:
+    - ``"#rrggbb"`` / ``"#rgb"`` / CSS name (sRGB) → linear RGB, alpha=None
+    - ``"#rrggbbaa"`` (sRGB + alpha)               → linear RGB, alpha
+    - ``(r, g, b)`` floats in [0, 1] (linear)      → linear RGB, alpha=None
+    - ``(r, g, b, a)`` floats in [0, 1] (linear)   → linear RGB, alpha
+
+    String inputs are sRGB-decoded; numeric tuples/lists are returned
+    untouched (already linear by convention).
+    """
+    if isinstance(c, str):
+        s = c.strip()
+        if s.startswith("#") and len(s) == 9:
+            r, g, b = ImageColor.getrgb(s[:7])[:3]
+            a = int(s[7:9], 16) / 255.0
+            return (
+                (
+                    _srgb_to_linear(r / 255.0),
+                    _srgb_to_linear(g / 255.0),
+                    _srgb_to_linear(b / 255.0),
+                ),
+                a,
+            )
+        return (_parse_color_string(s, as_linear=True), None)
+    if isinstance(c, (tuple, list)):
+        if len(c) == 3:
+            return ((float(c[0]), float(c[1]), float(c[2])), None)
+        if len(c) == 4:
+            return (
+                (float(c[0]), float(c[1]), float(c[2])),
+                float(c[3]),
+            )
+        raise ValueError(
+            f"Color tuple/list must have 3 or 4 elements, got {len(c)}"
+        )
+    raise TypeError(f"Unsupported color type: {type(c).__name__}")
+
+
+def _normalize_srgb_color(c) -> tuple[tuple[float, float, float], float | None]:
+    """Normalize a permissive color value to **sRGB** ``((r, g, b), alpha | None)``.
+
+    Used for the ``color`` field that Three.js consumes via
+    ``setRGB(r, g, b, SRGBColorSpace)`` — the viewer linearizes internally.
+    Storing sRGB byte ratios in ``values.color`` lets a numeric input like
+    ``(0.5, 0.5, 0.5)`` mean "perceptual midgray" rather than "linear midgray."
+
+    For color fields Three.js consumes as linear (emissive, sheen_color,
+    specular_color, attenuation_color), use ``_normalize_color``.
+
+    Accepted inputs:
+    - ``"#rrggbb"`` / ``"#rgb"`` / CSS name (sRGB) → sRGB byte ratios, alpha=None
+    - ``"#rrggbbaa"`` (sRGB + alpha)               → sRGB byte ratios, alpha
+    - ``(r, g, b)`` floats in [0, 1] (sRGB)        → passthrough, alpha=None
+    - ``(r, g, b, a)`` floats in [0, 1] (sRGB)     → passthrough, alpha
+    """
+    if isinstance(c, str):
+        s = c.strip()
+        if s.startswith("#") and len(s) == 9:
+            r, g, b = ImageColor.getrgb(s[:7])[:3]
+            a = int(s[7:9], 16) / 255.0
+            return ((r / 255.0, g / 255.0, b / 255.0), a)
+        return (_parse_color_string(s, as_linear=False), None)
+    if isinstance(c, (tuple, list)):
+        if len(c) == 3:
+            return ((float(c[0]), float(c[1]), float(c[2])), None)
+        if len(c) == 4:
+            return (
+                (float(c[0]), float(c[1]), float(c[2])),
+                float(c[3]),
+            )
+        raise ValueError(
+            f"Color tuple/list must have 3 or 4 elements, got {len(c)}"
+        )
+    raise TypeError(f"Unsupported color type: {type(c).__name__}")

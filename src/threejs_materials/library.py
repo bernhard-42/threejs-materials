@@ -28,10 +28,47 @@ from threejs_materials.utils import (
     _abbreviate_textures,
     _is_data_uri,
     _resolve_to_data_uri,
-    _linear_to_srgb,
     _linear_average_texture,
-    _parse_color_string,
+    _linear_to_srgb,
+    _normalize_color,
+    _normalize_srgb_color,
 )
+
+# Color-typed override kwargs split by storage convention.
+# ``color`` is sRGB-stored (matches three-cad-viewer's setRGB(SRGBColorSpace));
+# the others are linear-stored (glTF *Factor spec; Three.js bare-color).
+_LINEAR_COLOR_OVERRIDE_KEYS = (
+    "emissive",
+    "sheen_color",
+    "specular_color",
+    "attenuation_color",
+)
+
+
+def _normalize_color_overrides(overrides: dict) -> dict:
+    """Return *overrides* with color values normalized to per-field convention.
+
+    - ``color`` → sRGB byte ratios; alpha component lifts to ``opacity``
+      (explicit ``opacity`` in *overrides* wins).
+    - ``emissive`` / ``sheen_color`` / ``specular_color`` /
+      ``attenuation_color`` → linear RGB.
+
+    Mutates a copy; the input dict is left untouched.
+    """
+    out = dict(overrides)
+    color_val = out.get("color")
+    if color_val is not None:
+        rgb, alpha = _normalize_srgb_color(color_val)
+        out["color"] = list(rgb)
+        if alpha is not None and out.get("opacity") is None:
+            out["opacity"] = alpha
+    for key in _LINEAR_COLOR_OVERRIDE_KEYS:
+        val = out.get(key)
+        if val is None:
+            continue
+        rgb, _ = _normalize_color(val)
+        out[key] = list(rgb)
+    return out
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +129,13 @@ class PbrProperties:
 
     @classmethod
     def from_dict(cls, data: dict) -> PbrProperties:
-        """Build from a raw data dict (as stored in cache JSON or returned by loaders)."""
+        """Build from a raw data dict (as stored in cache JSON or returned by loaders).
+
+        **No normalization** is applied — callers populating ``data`` directly
+        are responsible for matching the per-field color-space convention
+        documented on :class:`PbrValues` (``values.color`` sRGB; ``emissive``,
+        ``sheen_color``, ``specular_color``, ``attenuation_color`` linear).
+        """
         td = data.get("maps_dir")
         return cls(
             id=data["id"],
@@ -118,16 +161,33 @@ class PbrProperties:
         texture_scale: tuple[float, float] = (1, 1),
         overrides: dict | None = None,
     ) -> PbrProperties:
+        """Build a PbrProperties from a Three.js-style PBR dict.
+
+        ``pbr["color"]`` accepts an int (hex), CSS hex string, CSS name,
+        or numeric 3/4-tuple. Numeric tuples are interpreted as **sRGB
+        byte ratios** (matching build123d's ``Color`` class output and the
+        downstream ``setRGB(SRGBColorSpace)`` consumption in
+        three-cad-viewer). A 4-tuple alpha lifts to ``pbr["opacity"]``
+        unless that key is also present (which wins).
+        """
         if texture_scale == 0:
             raise ValueError("texture_scale needs to be > 0")
 
         color = pbr.get("color")
-
         if isinstance(color, int):
             color = f"#{color:06x}"
 
-        if isinstance(color, str):
-            color = _parse_color_string(color, as_linear=False)
+        color_alpha = None
+        if color is not None:
+            # values.color is sRGB-stored (matches three-cad-viewer's
+            # setRGB(SRGBColorSpace) consumption). build123d emits sRGB byte
+            # ratios; hex/named strings are sRGB by definition.
+            rgb, color_alpha = _normalize_srgb_color(color)
+            color = list(rgb)
+
+        opacity = pbr.get("opacity")
+        if opacity is None and color_alpha is not None:
+            opacity = color_alpha
 
         values = {
             "metalness": pbr.get("metalness"),
@@ -137,23 +197,17 @@ class PbrProperties:
             "transmission": pbr.get("transmission"),
             "clearcoat": pbr.get("clearcoat"),
             "emissive": pbr.get("emissive"),
-            "opacity": pbr.get("opacity"),
+            "opacity": opacity,
             "dispersion": pbr.get("dispersion"),
             "specular_color": pbr.get("specular_color"),
             "specular_intensity": pbr.get("specular_intensity"),
         }
 
         if overrides:
-            if "color" in overrides:
-                oc = overrides["color"]
-                if isinstance(oc, int):
-                    oc = f"#{oc:06x}"
-                if isinstance(oc, str):
-                    oc = list(_parse_color_string(oc, as_linear=False))
-                elif isinstance(oc, (tuple, list)):
-                    oc = list(oc)
-                overrides = {**overrides, "color": oc}
-            values.update(overrides)
+            ovr = dict(overrides)
+            if "color" in ovr and isinstance(ovr["color"], int):
+                ovr["color"] = f"#{ovr['color']:06x}"
+            values.update(_normalize_color_overrides(ovr))
 
         new_dict = {
             "name": name,
@@ -337,6 +391,15 @@ class PbrProperties:
         silent multiplications. When both a scalar and its paired map are
         provided, Three.js / glTF multiply them per spec.
 
+        Color-space convention (see :class:`PbrValues`):
+
+        - ``color`` is sRGB-stored; numeric tuples are interpreted as sRGB.
+          A 4-tuple (or ``#rrggbbaa``) lifts the alpha into ``opacity``
+          unless ``opacity=`` is passed explicitly.
+        - ``emissive`` / ``sheen_color`` / ``specular_color`` /
+          ``attenuation_color`` are linear-stored; numeric tuples are
+          interpreted as linear. Strings are sRGB and get gamma-decoded.
+
         If a caller needs Three.js's own defaults (e.g. white color when a
         color_map is given without an explicit color), simply omit the
         scalar — the value serializes as absent and Three.js uses its
@@ -357,10 +420,11 @@ class PbrProperties:
 
         values: dict = {}
         if color is not None:
-            if isinstance(color, str):
-                values["color"] = list(_parse_color_string(color))
-            else:
-                values["color"] = list(color)[:3]
+            # color → sRGB-stored (Three.js setRGB(SRGBColorSpace))
+            rgb, color_alpha = _normalize_srgb_color(color)
+            values["color"] = list(rgb)
+            if color_alpha is not None and opacity is None:
+                opacity = color_alpha
         if metalness is not None:
             values["metalness"] = metalness
         if roughness is not None:
@@ -376,7 +440,7 @@ class PbrProperties:
         if alpha_test is not None:
             values["alphaTest"] = alpha_test
         if emissive is not None:
-            values["emissive"] = list(emissive[:3])
+            values["emissive"] = list(_normalize_color(emissive)[0])
         if emissive_intensity is not None:
             values["emissiveIntensity"] = emissive_intensity
         if clearcoat is not None:
@@ -386,7 +450,7 @@ class PbrProperties:
         if sheen is not None:
             values["sheen"] = sheen
         if sheen_color is not None:
-            values["sheenColor"] = list(sheen_color[:3])
+            values["sheenColor"] = list(_normalize_color(sheen_color)[0])
         if sheen_roughness is not None:
             values["sheenRoughness"] = sheen_roughness
         if anisotropy is not None:
@@ -396,9 +460,9 @@ class PbrProperties:
         if specular_intensity is not None:
             values["specularIntensity"] = specular_intensity
         if specular_color is not None:
-            values["specularColor"] = list(specular_color[:3])
+            values["specularColor"] = list(_normalize_color(specular_color)[0])
         if attenuation_color is not None:
-            values["attenuationColor"] = list(attenuation_color[:3])
+            values["attenuationColor"] = list(_normalize_color(attenuation_color)[0])
         if attenuation_distance is not None:
             values["attenuationDistance"] = attenuation_distance
         if thickness is not None:
@@ -500,7 +564,20 @@ class PbrProperties:
         displacement_scale=None,
         side=None,
     ) -> PbrProperties:
-        """Return a new PbrProperties with value overrides."""
+        """Return a new PbrProperties with value overrides.
+
+        Color-space convention (per :class:`PbrValues`):
+
+        - ``color`` accepts sRGB hex (``"#rrggbb"`` / ``"#rrggbbaa"``), CSS
+          names, or sRGB-by-convention numeric tuples. Stored sRGB.
+          A 4th element / ``aa`` byte lifts into ``opacity`` unless
+          ``opacity=`` is also passed (which wins).
+        - ``emissive`` / ``sheen_color`` / ``specular_color`` /
+          ``attenuation_color`` accept the same forms but are interpreted
+          as **linear** for numeric tuples (matches glTF *Factor spec and
+          Three.js's bare ``new THREE.Color`` constructor). Strings are
+          still sRGB and get gamma-decoded.
+        """
         overrides = {
             k: v
             for k, v in {
@@ -536,6 +613,7 @@ class PbrProperties:
             }.items()
             if v is not None
         }
+        overrides = _normalize_color_overrides(overrides)
         new_values = copy.deepcopy(self.values)
         new_maps = copy.deepcopy(self.maps)
         for key, value in overrides.items():
@@ -673,31 +751,34 @@ class PbrProperties:
         """Estimate a representative sRGB color + alpha for CAD mode display.
 
         When a color texture is present, the texture's linear-space average
-        is used directly — without multiplying by ``values.color``. The
-        scalar is physically correct for Three.js rendering (where it
-        multiplies into the albedo), but this method returns the
-        perceptually-representative preview color after the viewer's tone
-        mapping and IBL. Including the scalar makes the preview noticeably
-        darker than the on-screen render.
+        is used (with sRGB-encoding for output). When ``values.color`` is
+        present, it's already sRGB-stored — returned directly. The scalar is
+        physically correct for Three.js rendering (where it multiplies into
+        the albedo), but this method returns the perceptually-representative
+        preview color; including the scalar makes the preview darker than
+        the on-screen render, so the texture branch ignores it.
         """
         color_val = self.values.color
         color_tex = self.maps.color
 
         if isinstance(color_val, str):
-            r, g, b = _parse_color_string(color_val)
+            # values.color stored as a string (CSS hex or named): sRGB by convention
+            sr, sg, sb = _normalize_srgb_color(color_val)[0]
         elif color_tex is not None:
+            # Texture average is computed in linear space → encode for output
             if self.maps_dir is not None:
-                r, g, b = _linear_average_texture(
+                lr, lg, lb = _linear_average_texture(
                     ref=color_tex, texture_dir=self.maps_dir
                 )
             else:
-                r, g, b = _linear_average_texture(texture=color_tex)
+                lr, lg, lb = _linear_average_texture(texture=color_tex)
+            sr, sg, sb = _linear_to_srgb(lr), _linear_to_srgb(lg), _linear_to_srgb(lb)
         elif isinstance(color_val, list):
-            r, g, b = color_val[:3]
+            # values.color is sRGB-stored — passthrough
+            sr, sg, sb = color_val[:3]
         else:
-            r, g, b = 0.5, 0.5, 0.5
-
-        sr, sg, sb = _linear_to_srgb(r), _linear_to_srgb(g), _linear_to_srgb(b)
+            # Fallback perceptual midgray (sRGB)
+            sr, sg, sb = 0.5, 0.5, 0.5
 
         alpha = 1.0
         opacity_val = self.values.opacity

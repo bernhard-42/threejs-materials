@@ -30,8 +30,11 @@ from pygltflib import Material as GltfMaterial
 from threejs_materials.utils import (
     _is_data_uri,
     _has_real_alpha,
+    _linear_to_srgb,
+    _normalize_srgb_color,
     _open_texture_image,
     _resolve_to_data_uri,
+    _srgb_to_linear,
 )
 
 if TYPE_CHECKING:
@@ -274,14 +277,27 @@ class _GltfBuilder:
         self.gltf.materials.append(gmat)
 
     def _build_pbr(self, val, tex_uri, tex_info, tex_repeat, texture_dir):
-        """Build PbrMetallicRoughness from internal properties."""
+        """Build PbrMetallicRoughness from internal properties.
+
+        ``values.color`` is sRGB-stored (matches three-cad-viewer's
+        ``setRGB(SRGBColorSpace)`` consumption). glTF spec requires
+        ``baseColorFactor`` in linear space, so we sRGB→linear here.
+        """
         color_val = val("color")
         opacity_val = val("opacity")
         alpha = float(opacity_val) if isinstance(opacity_val, (int, float)) else 1.0
 
-        if color_val is not None and isinstance(color_val, list):
-            base_color_factor = color_val[:3] + [alpha]
-        elif color_val is not None or alpha < 1.0:
+        # Normalize the color value (handles strings, lists, tuples uniformly).
+        # Strings used to fall through silently; now they're decoded.
+        if color_val is not None:
+            srgb_rgb, _ = _normalize_srgb_color(color_val)
+            base_color_factor = [
+                _srgb_to_linear(srgb_rgb[0]),
+                _srgb_to_linear(srgb_rgb[1]),
+                _srgb_to_linear(srgb_rgb[2]),
+                alpha,
+            ]
+        elif alpha < 1.0:
             base_color_factor = [1.0, 1.0, 1.0, alpha]
         else:
             base_color_factor = None
@@ -1099,8 +1115,11 @@ def _from_gltf(
         if pbr is None:
             pbr = PbrMetallicRoughness()
 
+        # baseColorFactor is linear per glTF spec — convert to sRGB byte
+        # ratios for storage (matches values.color convention; viewer's
+        # setRGB(SRGBColorSpace) handles re-linearization at render time).
         bcf = pbr.baseColorFactor or [1.0, 1.0, 1.0, 1.0]
-        val("color", list(bcf[:3]))
+        val("color", [_linear_to_srgb(c) for c in bcf[:3]])
         if len(bcf) > 3 and bcf[3] < 1.0:
             val("opacity", bcf[3])
             val("transparent", True)

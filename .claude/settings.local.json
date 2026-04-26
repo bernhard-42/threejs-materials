@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Read(//Users/bernhard/.materialx-cache/**)",
-      "Read(//Users/bernhard/Development/MaterialX/**)"
+      "Read(//Users/bernhard/Development/MaterialX/**)",
+      "Read(//Users/bernhard/Development/**)",
+      "Read(//Users/bernhard/**)",
+      "Bash(/usr/bin/grep *)",
+      "Bash(/Users/bernhard/.uv-global/ocp79/.venv/bin/python -m pytest tests/test_fixes.py::TestAlwaysBakeProcedural --tb=long -q)",
+      "Bash(/Users/bernhard/.uv-global/ocp79/.venv/bin/python -m pytest tests/ --tb=line -q)",
+      "Bash(/Users/bernhard/.uv-global/ocp79/.venv/bin/python -m pytest tests/test_convert.py::TestToThreejsPhysical::test_open_pbr_surface_base_weight_default_emits_neutral --tb=short -q)"
     ]
   }
 }

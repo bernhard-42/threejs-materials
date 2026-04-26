@@ -194,8 +194,12 @@ class TestToThreejsPhysical:
             "textures": {},
         }
         props = to_threejs_physical(mat, tmp_path)
-        # color = base * base_color
-        assert props["color"]["value"] == pytest.approx([0.4, 0.24, 0.08])
+        # color = sRGB-encoded(base * base_color); MaterialX is linear,
+        # values.color is sRGB-stored (matches three-cad-viewer's
+        # setRGB(SRGBColorSpace) consumption).
+        from threejs_materials.utils import _linear_to_srgb
+        expected = [_linear_to_srgb(c) for c in [0.4, 0.24, 0.08]]
+        assert props["color"]["value"] == pytest.approx(expected)
         assert props["metalness"]["value"] == 0.0
         assert props["roughness"]["value"] == 0.4
         assert props["specularIntensity"]["value"] == 1.0
@@ -215,8 +219,10 @@ class TestToThreejsPhysical:
             "textures": {"base_color": {"file": "textures/base_color.png"}},
         }
         props = to_threejs_physical(mat, tmp_path)
-        # With texture, color carries the base weight as multiplier
-        assert props["color"]["value"] == [0.5, 0.5, 0.5]
+        # With texture, color carries the base weight as a multiplier (sRGB-encoded).
+        from threejs_materials.utils import _linear_to_srgb
+        expected_v = _linear_to_srgb(0.5)
+        assert props["color"]["value"] == pytest.approx([expected_v] * 3)
         assert "texture" in props["color"]
 
     def test_standard_surface_emission(self, tmp_path):
@@ -376,7 +382,11 @@ class TestToThreejsPhysical:
             "textures": {},
         }
         props = to_threejs_physical(mat, tmp_path)
-        assert props["color"]["value"] == [0.8, 0.2, 0.1]
+        # MaterialX gltf_pbr base_color is linear; values.color is sRGB-stored.
+        from threejs_materials.utils import _linear_to_srgb
+        assert props["color"]["value"] == pytest.approx(
+            [_linear_to_srgb(c) for c in [0.8, 0.2, 0.1]]
+        )
         assert props["metalness"]["value"] == 0.0
         assert props["roughness"]["value"] == 0.5
 
@@ -476,7 +486,9 @@ class TestToThreejsPhysical:
             "textures": {},
         }
         props = to_threejs_physical(mat, tmp_path)
-        assert props["color"]["value"] == pytest.approx([0.6, 0.6, 0.6])
+        # MaterialX values are linear; values.color is sRGB-stored.
+        from threejs_materials.utils import _linear_to_srgb
+        assert props["color"]["value"] == pytest.approx([_linear_to_srgb(0.6)] * 3)
         assert props["metalness"]["value"] == 0.0
         assert props["roughness"]["value"] == 0.3
         assert props["ior"]["value"] == 1.5
@@ -512,7 +524,9 @@ class TestToThreejsPhysical:
             "textures": {"base_color": {"file": "textures/base_color.png"}},
         }
         props = to_threejs_physical(mat, tmp_path)
-        assert props["color"]["value"] == [0.5, 0.5, 0.5]
+        # base_weight=0.5 linear → sRGB-encoded scalar carries through.
+        from threejs_materials.utils import _linear_to_srgb
+        assert props["color"]["value"] == pytest.approx([_linear_to_srgb(0.5)] * 3)
         assert "texture" in props["color"]
 
     def test_open_pbr_surface_base_weight_default_emits_neutral(
@@ -534,7 +548,9 @@ class TestToThreejsPhysical:
             "textures": {"base_color": {"file": "textures/base_color.png"}},
         }
         props = to_threejs_physical(mat, tmp_path)
-        assert props["color"]["value"] == [1.0, 1.0, 1.0]
+        # base_weight=1.0 → neutral; [1,1,1] is invariant under linear↔sRGB
+        # (modulo float epsilon).
+        assert props["color"]["value"] == pytest.approx([1.0, 1.0, 1.0], abs=1e-9)
 
     def test_open_pbr_surface_emission(self, tmp_path):
         mat = {
