@@ -768,9 +768,19 @@ class PbrProperties:
             ovr_srgb, _ = _normalize_srgb_color(override_color)
             if color_tex is not None:
                 lr, lg, lb = _tex_avg_linear()
-                sr = _linear_to_srgb(lr * _srgb_to_linear(ovr_srgb[0]))
-                sg = _linear_to_srgb(lg * _srgb_to_linear(ovr_srgb[1]))
-                sb = _linear_to_srgb(lb * _srgb_to_linear(ovr_srgb[2]))
+                ovr_lin = [_srgb_to_linear(c) for c in ovr_srgb]
+                mr, mg, mb = lr * ovr_lin[0], lg * ovr_lin[1], lb * ovr_lin[2]
+                # Rescale multiplied result to texture's Rec.709 luminance —
+                # approximates what lighting + tone mapping contribute in the
+                # rendered preview, without which the swatch reads too dark.
+                y_tex = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb
+                y_mul = 0.2126 * mr + 0.7152 * mg + 0.0722 * mb
+                if y_mul > 1e-6:
+                    s = min(y_tex / y_mul, 8.0)
+                    mr, mg, mb = mr * s, mg * s, mb * s
+                sr = _linear_to_srgb(min(mr, 1.0))
+                sg = _linear_to_srgb(min(mg, 1.0))
+                sb = _linear_to_srgb(min(mb, 1.0))
             else:
                 sr, sg, sb = ovr_srgb
         elif isinstance(color_val, str):

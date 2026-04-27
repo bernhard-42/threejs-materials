@@ -1161,14 +1161,14 @@ class TestInterpolateColor:
         r, g, b, _ = mat.interpolate_color(override_color="#0000ff")
         assert (r, g, b) == pytest.approx((0.0, 0.0, 1.0), abs=1e-3)
 
-    def test_override_color_with_texture_multiplies_in_linear(self):
-        """texture_avg × override (linear), then sRGB-encoded for output."""
-        from threejs_materials.utils import _linear_to_srgb, _srgb_to_linear
+    def test_override_color_with_texture_preserves_luminance(self):
+        """texture × override hue, rescaled to texture luminance — preview
+        matches rendered brightness instead of the dim physical multiply."""
         from PIL import Image as PILImage
         import io
         import base64
 
-        # Solid mid-gray color texture (sRGB 0x80 → linear ~0.216)
+        # Solid mid-gray texture (sRGB 0x80 ≈ linear 0.216 across all channels)
         img = PILImage.new("RGB", (4, 4), (0x80, 0x80, 0x80))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -1179,11 +1179,51 @@ class TestInterpolateColor:
             "values": {},
             "textures": {"color": tex},
         })
-        # Override = (0.5, 0.5, 0.5) sRGB → linear ~0.216
-        # Texture linear ~0.216, multiplied → ~0.0466 linear → sRGB ~0.235
+        # Gray override × gray texture: luminance preservation pulls the
+        # result back up to the texture's brightness (sRGB 0.502).
         r, g, b, _ = mat.interpolate_color(override_color=(0.5, 0.5, 0.5))
-        expected = _linear_to_srgb(_srgb_to_linear(0.5020) * _srgb_to_linear(0.5020))
-        assert (r, g, b) == pytest.approx((expected, expected, expected), abs=1e-2)
+        assert (r, g, b) == pytest.approx((0.502, 0.502, 0.502), abs=1e-2)
+
+    def test_override_color_dark_tint_brightens_to_texture_luminance(self):
+        """Regression: a dark teal tint on a moderate-luminance texture
+        was producing near-black preview (~sRGB 0.25) instead of a readable
+        green. Luminance preservation lifts it to ~half intensity per channel."""
+        from PIL import Image as PILImage
+        import io
+        import base64
+
+        # Solid mid-gray texture
+        img = PILImage.new("RGB", (4, 4), (0x80, 0x80, 0x80))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        tex = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+        mat = PbrProperties.from_dict({
+            **_sample_data(),
+            "values": {},
+            "textures": {"color": tex},
+        })
+        # (0, 0.5, 0.5) override: blue+green channels active, red zero.
+        # Without rescale: sRGB ~(0, 0.235, 0.235). With rescale: ~(0, 0.55, 0.55).
+        r, g, b, _ = mat.interpolate_color(override_color=(0, 0.5, 0.5))
+        assert r == pytest.approx(0.0, abs=1e-3)
+        assert g > 0.4 and b > 0.4  # readable green/blue, not near-black
+        assert g == pytest.approx(b, abs=1e-3)  # symmetric around the swap
+
+    def test_override_color_pure_black_stays_black(self):
+        """Pure-black override: y_mul ≈ 0, no rescale, result stays black."""
+        from PIL import Image as PILImage
+        import io
+        import base64
+        img = PILImage.new("RGB", (4, 4), (0x80, 0x80, 0x80))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        tex = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        mat = PbrProperties.from_dict({
+            **_sample_data(), "values": {}, "textures": {"color": tex},
+        })
+        r, g, b, _ = mat.interpolate_color(override_color=(0, 0, 0))
+        assert (r, g, b) == (0.0, 0.0, 0.0)
 
     def test_override_color_none_preserves_existing_behavior(self):
         """Default override_color=None: same result as no argument."""
