@@ -50,6 +50,7 @@
 - **`create(color=4-tuple)` no longer drops alpha** — previously the 4th element was silently truncated. Now lifted into `opacity` (explicit `opacity=` still wins). Hex with alpha (`"#rrggbbaa"`) lifts the same way.
 - **String colors no longer silently dropped on glTF export** — `values.color = "#ff8000"` previously fell through `_build_pbr`'s `isinstance(color, list)` check and exported as `[1.0, 1.0, 1.0]` (color lost). Now normalized before the linear conversion at the boundary, so all input forms (hex, name, list, tuple) survive export.
 - **glTF round-trip for color is lossless within float precision** — `to_gltf()` does sRGB→linear at `_build_pbr`; `from_gltf()` does linear→sRGB on read. Round-trip preserves the input value.
+- **`from_gltf()` no longer drops textures stored in bufferViews** — `.glb` files (and any glTF that stores images inline as bufferViews instead of as `uri` fields) had their textures silently dropped on import: `PbrMaps()` came back empty even though the file's `images` array was populated. The pygltflib `convert_images(ImageFormat.DATAURI)` call now also fires for bufferView-stored images, not only file-URI references. pygltflib's bufferView-extraction path is also noisy (prints internal state to stdout, emits over-paranoid "may corrupt the GLTF" warnings) — both are now suppressed at the call site since the resulting data URIs are correct.
 
 ## Internals / refactor
 

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import copy
 import hashlib
 import io
 import logging
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1054,9 +1056,22 @@ def _from_gltf(
     """
 
 
-    # Convert any file-referenced images to data URIs
-    if any(img.uri and not _is_data_uri(img.uri) for img in (gltf.images or [])):
-        gltf.convert_images(ImageFormat.DATAURI)
+    # Convert any file-referenced or bufferView-stored images to data URIs.
+    # bufferView-stored images are typical for .glb files; without this they'd
+    # fall through _resolve_tex_by_index's data-URI check and get silently
+    # dropped from PbrMaps.
+    #
+    # pygltflib's convert_images is noisy on bufferView extraction: it prints
+    # internal state to stdout ("gltf.images[0] empty" etc.) and emits
+    # over-paranoid "may corrupt the GLTF" warnings during bufferView cleanup
+    # even though the resulting data URIs are correct. Silence both — we only
+    # need the extracted data URIs.
+    if any(
+        not (img.uri and _is_data_uri(img.uri)) for img in (gltf.images or [])
+    ):
+        with warnings.catch_warnings(), contextlib.redirect_stdout(io.StringIO()):
+            warnings.simplefilter("ignore")
+            gltf.convert_images(ImageFormat.DATAURI)
     images = gltf.images or []
     textures_arr = gltf.textures or []
 
@@ -1259,7 +1274,12 @@ def _from_gltf(
             "license": "",
             "values": values,
             "textures": textures,
-            "normalize_uvs": False,
+            # bbox-normalized UVs by default — keeps 1 tile per bbox_max_dim,
+            # consistent across faces of any size. Raw OCCT parametric UVs
+            # (in mm for build123d) would produce thousands of pixel-sized
+            # tiles on real-world geometry. Use mat.scale(u, v, fixed=False)
+            # to opt back into the file's raw UVs.
+            "normalize_uvs": True,
         }
         if texture_repeat is not None:
             data["texture_repeat"] = texture_repeat

@@ -315,6 +315,24 @@ class TestRoundTrip:
         imported = next(iter(PbrProperties.from_gltf(g).values()))
         assert imported.maps.color == tex
 
+    def test_texture_preserved_through_binary_buffer_view(self):
+        """Regression: .glb files store images in bufferViews (no URI). The
+        previous from_gltf code only handled URI-based images and silently
+        dropped bufferView-stored ones, leaving PbrMaps() empty."""
+        from threejs_materials.gltf import _embed_data_uri_images
+        tex = _b64_png(200, 100, 50)
+        mat = _sample(
+            values={"color": [1, 1, 1], "metalness": 1.0},
+            textures={"color": tex, "normal": _b64_png(0, 0, 255)},
+        )
+        g = mat.to_gltf()
+        # Mimic the .glb shape: convert data-URI images to bufferView storage.
+        _embed_data_uri_images(g)
+        assert all(img.bufferView is not None and img.uri is None for img in g.images)
+        imported = next(iter(PbrProperties.from_gltf(g).values()))
+        assert imported.maps.color is not None and imported.maps.color.startswith("data:")
+        assert imported.maps.normal is not None and imported.maps.normal.startswith("data:")
+
     def test_export_reimport_reexport_stable(self):
         """export → import → export is stable (second round-trip is identical)."""
         mat = _sample(values={
