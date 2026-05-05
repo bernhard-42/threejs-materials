@@ -315,6 +315,26 @@ class TestRoundTrip:
         imported = next(iter(PbrProperties.from_gltf(g).values()))
         assert imported.maps.color == tex
 
+    def test_texture_rotation_round_trip(self):
+        """rotation in degrees → KHR_texture_transform.rotation in radians →
+        back to degrees on import. Lossless within float precision."""
+        import math
+        tex = _b64_png(200, 100, 50)
+        mat = _sample(
+            values={"color": [1, 1, 1]},
+            textures={"color": tex},
+        ).scale(2, 2, rotation=90)
+        g = mat.to_gltf()
+        # Spec compliance: wire is radians
+        bct = g.materials[0].pbrMetallicRoughness.baseColorTexture
+        transform = bct.extensions["KHR_texture_transform"]
+        assert transform["rotation"] == pytest.approx(math.pi / 2, abs=1e-6)
+        assert transform["scale"] == [0.5, 0.5]
+        # Round-trip back to degrees
+        imported = next(iter(PbrProperties.from_gltf(g).values()))
+        assert imported.texture_rotation == pytest.approx(90, abs=1e-6)
+        assert imported.texture_repeat == (0.5, 0.5)
+
     def test_texture_preserved_through_binary_buffer_view(self):
         """Regression: .glb files store images in bufferViews (no URI). The
         previous from_gltf code only handled URI-based images and silently

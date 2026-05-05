@@ -1080,6 +1080,7 @@ class TestTextureTransform:
         from threejs_materials import TextureTransform
         t = TextureTransform()
         assert t.scale == (1.0, 1.0)
+        assert t.rotation == 0.0
         assert t.fixed_size is True
 
     def test_as_kwargs_drives_scale(self):
@@ -1087,21 +1088,82 @@ class TestTextureTransform:
         mat.scale(**...). Must produce same result as direct scale() call."""
         from threejs_materials import TextureTransform
         mat = PbrProperties.from_dict(_sample_data())
-        transform = TextureTransform(scale=(2.0, 2.0), fixed_size=True)
+        transform = TextureTransform(scale=(2.0, 2.0), rotation=90, fixed_size=True)
 
         from_dataclass = mat.scale(**transform.as_kwargs())
-        from_kwargs = mat.scale(2.0, 2.0, fixed=True)
+        from_kwargs = mat.scale(2.0, 2.0, fixed=True, rotation=90)
 
         assert from_dataclass.id == from_kwargs.id
         assert from_dataclass.texture_repeat == from_kwargs.texture_repeat
+        assert from_dataclass.texture_rotation == from_kwargs.texture_rotation
         assert from_dataclass.normalize_uvs == from_kwargs.normalize_uvs
 
     def test_frozen_and_hashable(self):
         from threejs_materials import TextureTransform
-        t = TextureTransform(scale=(2.0, 2.0))
+        t = TextureTransform(scale=(2.0, 2.0), rotation=45)
         with pytest.raises(Exception):
             t.scale = (4.0, 4.0)
         assert hash(t) is not None
+
+
+class TestScaleRotation:
+    """``mat.scale(rotation=alpha)`` stores rotation in degrees and emits
+    radians on the wire (Three.js / glTF spec)."""
+
+    def test_default_no_rotation(self):
+        mat = PbrProperties.from_dict(_sample_data())
+        s = mat.scale(2, 2)
+        assert s.texture_rotation is None
+        # to_dict omits the field entirely when no rotation
+        assert "textureRotation" not in s.to_dict()
+
+    def test_rotation_stored_as_degrees(self):
+        mat = PbrProperties.from_dict(_sample_data())
+        s = mat.scale(2, 2, rotation=90)
+        assert s.texture_rotation == 90
+
+    def test_to_dict_emits_radians(self):
+        """JSON output uses radians for direct Three.js consumption."""
+        import math
+        mat = PbrProperties.from_dict(_sample_data())
+        s = mat.scale(rotation=90)
+        assert s.to_dict()["textureRotation"] == pytest.approx(math.pi / 2, abs=1e-6)
+
+    def test_rotation_affects_variant_id(self):
+        """Different rotation → different variant id (so dict-keyed
+        materials don't collapse)."""
+        mat = PbrProperties.from_dict(_sample_data())
+        a = mat.scale(2, 2)
+        b = mat.scale(2, 2, rotation=90)
+        c = mat.scale(2, 2, rotation=180)
+        assert len({a.id, b.id, c.id}) == 3
+
+    def test_rotation_round_trips_through_from_dict(self):
+        """from_dict reads texture_rotation from data → preserves on round-trip."""
+        mat = PbrProperties.from_dict(_sample_data()).scale(2, 2, rotation=45)
+        d = mat.to_dict()
+        # Note: to_dict emits camelCase 'textureRotation' (radians) for the
+        # viewer; from_dict reads 'texture_rotation' (degrees) for round-trip
+        # via the cache JSON shape used internally.
+        d["texture_rotation"] = mat.texture_rotation
+        round_tripped = PbrProperties.from_dict(d)
+        assert round_tripped.texture_rotation == 45
+
+    def test_scale_replaces_rotation(self):
+        """Each scale() call replaces the full transform — chaining .scale(2,2)
+        after .scale(rotation=90) drops the rotation."""
+        mat = PbrProperties.from_dict(_sample_data())
+        s = mat.scale(rotation=90).scale(2, 2)
+        assert s.texture_rotation is None
+
+    def test_override_preserves_rotation_and_repeat(self):
+        """Regression: ``mat.scale(rotation=90).override(color="red")`` used
+        to drop ``texture_rotation`` because override() didn't propagate it."""
+        mat = PbrProperties.from_dict(_sample_data())
+        chained = mat.scale(2, 2, rotation=90).override(color="red")
+        assert chained.texture_rotation == 90
+        assert chained.texture_repeat == (0.5, 0.5)
+        assert chained.values.color == [1.0, 0.0, 0.0]
 
 
 # ---------------------------------------------------------------------------
@@ -1232,6 +1294,33 @@ class TestInterpolateColor:
             "values": {"color": [0.7, 0.3, 0.1]},
         })
         assert mat.interpolate_color() == mat.interpolate_color(override_color=None)
+
+    def test_override_applied_color_tints_texture(self):
+        """Regression: ``mat.override(color="red").interpolate_color()`` used
+        to ignore the override when a color texture existed — the texture
+        branch fired before the list-color branch. Now ``values.color`` tints
+        the texture identically to passing ``override_color=`` directly."""
+        from PIL import Image as PILImage
+        import io
+        import base64
+
+        img = PILImage.new("RGB", (4, 4), (0x80, 0x80, 0x80))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        tex = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+        mat = PbrProperties.from_dict({
+            **_sample_data(),
+            "values": {},
+            "textures": {"color": tex},
+        })
+
+        from_override = mat.override(color="red").interpolate_color()
+        from_arg = mat.interpolate_color(override_color="red")
+        assert from_override == from_arg
+        # And it must actually be reddish, not the texture's neutral gray
+        r, g, b, _ = from_override
+        assert r > 0.4 and g < 0.05 and b < 0.05
 
 
 class TestClearCache:

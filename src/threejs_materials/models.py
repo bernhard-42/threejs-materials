@@ -323,15 +323,21 @@ class PbrOverrides:
 class TextureTransform:
     """Typed config object mirroring ``PbrProperties.scale()`` arguments.
 
-    Mirrors the scaling component of glTF's ``KHR_texture_transform`` plus
-    the ``fixed=`` flag of ``scale()``. Use ``.as_kwargs()`` to convert into
-    a kwargs dict for ``mat.scale(**transform.as_kwargs())``.
+    Mirrors the scale + rotation components of glTF's ``KHR_texture_transform``
+    plus the ``fixed=`` flag of ``scale()``. ``rotation`` is in degrees,
+    counterclockwise. Use ``.as_kwargs()`` for ``mat.scale(**transform.as_kwargs())``.
     """
     scale: tuple[float, float] = (1.0, 1.0)
+    rotation: float = 0.0
     fixed_size: bool = True
 
     def as_kwargs(self) -> dict:
         """Return fields as a kwargs dict for ``mat.scale(**...)``."""
-        return {"u": self.scale[0], "v": self.scale[1], "fixed": self.fixed_size}
+        return {
+            "u": self.scale[0],
+            "v": self.scale[1],
+            "rotation": self.rotation,
+            "fixed": self.fixed_size,
+        }
 
 

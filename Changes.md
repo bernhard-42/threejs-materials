@@ -1,3 +1,14 @@
+# v1.1.1
+
+## Features
+
+- **Texture rotation support** — `mat.scale(rotation=deg)` and the new `PbrProperties.texture_rotation` field carry a counterclockwise rotation in degrees. Round-trips through `KHR_texture_transform.rotation` (radians on the wire) on every textured slot (`baseColor`, `metallicRoughness`, `normal`, `occlusion`). `to_dict()` emits `textureRotation` in radians for direct Three.js `texture.rotation` consumption. `TextureTransform` gains a matching `rotation` field.
+
+## Fixes
+
+- **`override()` now preserves `texture_rotation`** — chained `mat.scale(rotation=90).override(color="red")` was silently dropping the rotation because the `override()` constructor call didn't propagate the new field.
+- **`interpolate_color()` respects override-applied color when a color texture is present** — `mat.override(color="red").interpolate_color()` previously ignored the override and returned the unmodified texture average, because the texture branch fired before the list-color branch. `values.color` (string or list) now tints the texture identically to passing `override_color=` directly: the result equals `mat.interpolate_color(override_color="red")` for the same input. The explicit `override_color=` argument still wins when both are set.
+
 # v1.1.0
 
 ## Breaking changes

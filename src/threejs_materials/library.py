@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -121,6 +122,8 @@ class PbrProperties:
     values: PbrValues = field(default_factory=PbrValues)
     maps: PbrMaps = field(default_factory=PbrMaps)
     texture_repeat: tuple | None = None
+    texture_rotation: float | None = None
+    """Texture rotation in **degrees**, counterclockwise. ``None`` means no rotation."""
     normalize_uvs: bool = True
     maps_dir: Path | None = field(default=None, repr=False)
 
@@ -147,6 +150,7 @@ class PbrProperties:
             values=PbrValues.from_dict(data.get("values", {})),
             maps=PbrMaps.from_dict(data.get("textures", {})),
             texture_repeat=data.get("texture_repeat"),
+            texture_rotation=data.get("texture_rotation"),
             normalize_uvs=data.get("normalize_uvs", True),
             maps_dir=Path(td) if td is not None else None,
         )
@@ -639,20 +643,33 @@ class PbrProperties:
             values=new_values,
             maps=new_maps,
             texture_repeat=self.texture_repeat,
+            texture_rotation=self.texture_rotation,
             normalize_uvs=self.normalize_uvs,
             maps_dir=self.maps_dir,
         )
 
-    def scale(self, u: float = 1, v: float = 1, fixed: bool = True) -> PbrProperties:
-        """Return a new PbrProperties with texture scale applied.
+    def scale(
+        self,
+        u: float = 1,
+        v: float = 1,
+        fixed: bool = True,
+        rotation: float = 0.0,
+    ) -> PbrProperties:
+        """Return a new PbrProperties with the texture UV transform replaced.
 
         ``scale(2, 2)`` makes the texture appear 2x larger, which
         corresponds to ``textureRepeat = (0.5, 0.5)`` in Three.js.
 
+        ``rotation`` is in **degrees**, counterclockwise. Pivot is the
+        texture center (0.5, 0.5) on the viewer side.
+
         When ``fixed=False``, raw (non-normalized) UVs are used, so texture
         size depends on object geometry and matches glTF/glb export.
+
+        Each call replaces the full transform — to combine scale and
+        rotation, pass them in the same call: ``mat.scale(2, 2, rotation=90)``.
         """
-        scale_kwargs = {"u": u, "v": v, "fixed": fixed}
+        scale_kwargs = {"u": u, "v": v, "fixed": fixed, "rotation": rotation}
         new_id = f"{self.name}_{_hash_override(self.id, scale_kwargs)}"
         return PbrProperties(
             id=new_id,
@@ -663,6 +680,7 @@ class PbrProperties:
             values=copy.deepcopy(self.values),
             maps=copy.deepcopy(self.maps),
             texture_repeat=(1.0 / u, 1.0 / v),
+            texture_rotation=rotation if rotation else None,
             normalize_uvs=fixed,
             maps_dir=self.maps_dir,
         )
@@ -691,6 +709,9 @@ class PbrProperties:
         }
         if self.texture_repeat is not None:
             d["textureRepeat"] = list(self.texture_repeat)
+        if self.texture_rotation:
+            # Emit radians for Three.js consumption (texture.rotation)
+            d["textureRotation"] = math.radians(self.texture_rotation)
         if not self.normalize_uvs:
             d["normalizeUvs"] = False
         return d
@@ -764,15 +785,23 @@ class PbrProperties:
                 return _linear_average_texture(ref=color_tex, texture_dir=self.maps_dir)
             return _linear_average_texture(texture=color_tex)
 
+        # override_color arg wins over values.color; both are sRGB tints
+        # against the texture (if any).
+        tint_srgb = None
         if override_color is not None:
-            ovr_srgb, _ = _normalize_srgb_color(override_color)
-            if color_tex is not None:
-                lr, lg, lb = _tex_avg_linear()
-                ovr_lin = [_srgb_to_linear(c) for c in ovr_srgb]
-                mr, mg, mb = lr * ovr_lin[0], lg * ovr_lin[1], lb * ovr_lin[2]
-                # Rescale multiplied result to texture's Rec.709 luminance —
-                # approximates what lighting + tone mapping contribute in the
-                # rendered preview, without which the swatch reads too dark.
+            tint_srgb, _ = _normalize_srgb_color(override_color)
+        elif isinstance(color_val, str):
+            tint_srgb, _ = _normalize_srgb_color(color_val)
+        elif isinstance(color_val, list):
+            tint_srgb = tuple(color_val[:3])
+
+        if color_tex is not None:
+            lr, lg, lb = _tex_avg_linear()
+            if tint_srgb is not None:
+                tint_lin = [_srgb_to_linear(c) for c in tint_srgb]
+                mr, mg, mb = lr * tint_lin[0], lg * tint_lin[1], lb * tint_lin[2]
+                # Rescale to texture luminance — approximates the lighting +
+                # tone mapping contribution; without it the swatch reads dim.
                 y_tex = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb
                 y_mul = 0.2126 * mr + 0.7152 * mg + 0.0722 * mb
                 if y_mul > 1e-6:
@@ -782,14 +811,9 @@ class PbrProperties:
                 sg = _linear_to_srgb(min(mg, 1.0))
                 sb = _linear_to_srgb(min(mb, 1.0))
             else:
-                sr, sg, sb = ovr_srgb
-        elif isinstance(color_val, str):
-            sr, sg, sb = _normalize_srgb_color(color_val)[0]
-        elif color_tex is not None:
-            lr, lg, lb = _tex_avg_linear()
-            sr, sg, sb = _linear_to_srgb(lr), _linear_to_srgb(lg), _linear_to_srgb(lb)
-        elif isinstance(color_val, list):
-            sr, sg, sb = color_val[:3]
+                sr, sg, sb = _linear_to_srgb(lr), _linear_to_srgb(lg), _linear_to_srgb(lb)
+        elif tint_srgb is not None:
+            sr, sg, sb = tint_srgb
         else:
             sr, sg, sb = 0.5, 0.5, 0.5
 

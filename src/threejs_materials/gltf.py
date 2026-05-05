@@ -8,6 +8,7 @@ import copy
 import hashlib
 import io
 import logging
+import math
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -43,6 +44,18 @@ if TYPE_CHECKING:
     from threejs_materials.library import PbrProperties as Material
 
 log = logging.getLogger(__name__)
+
+
+def _texture_transform(tex_repeat, tex_rotation_deg) -> dict | None:
+    """Build a KHR_texture_transform extension payload, or None for identity.
+    Rotation is converted from degrees (PbrProperties convention) to radians
+    (glTF spec convention)."""
+    transform = {}
+    if tex_repeat is not None:
+        transform["scale"] = list(tex_repeat)
+    if tex_rotation_deg:
+        transform["rotation"] = math.radians(tex_rotation_deg)
+    return transform or None
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +227,7 @@ class _GltfBuilder:
         # Skip no-op texture transform
         if tex_repeat is not None and tex_repeat == (1.0, 1.0):
             tex_repeat = None
+        tex_rotation = material.texture_rotation
 
         # vals/texs may be dataclasses or plain dicts (legacy)
         _vals = vals.to_dict() if hasattr(vals, "to_dict") else vals
@@ -230,14 +244,13 @@ class _GltfBuilder:
             if uri is None:
                 return None
             ti = TextureInfo(index=self._register_image(uri, prop_name))
-            if tex_repeat is not None:
-                ti.extensions["KHR_texture_transform"] = {
-                    "scale": list(tex_repeat),
-                }
+            transform = _texture_transform(tex_repeat, tex_rotation)
+            if transform is not None:
+                ti.extensions["KHR_texture_transform"] = transform
                 self._extensions_used.add("KHR_texture_transform")
             return ti
 
-        pbr = self._build_pbr(val, tex_uri, tex_info, tex_repeat, texture_dir)
+        pbr = self._build_pbr(val, tex_uri, tex_info, tex_repeat, tex_rotation, texture_dir)
         extensions = self._build_extensions(val, tex_uri, tex_info)
 
         # Alpha mode
@@ -264,8 +277,8 @@ class _GltfBuilder:
         gmat = GltfMaterial(
             name=name or material.name,
             pbrMetallicRoughness=pbr,
-            normalTexture=self._build_normal(val, tex_uri, tex_repeat),
-            occlusionTexture=self._build_occlusion(tex_uri, tex_repeat),
+            normalTexture=self._build_normal(val, tex_uri, tex_repeat, tex_rotation),
+            occlusionTexture=self._build_occlusion(tex_uri, tex_repeat, tex_rotation),
             emissiveFactor=emissive_factor,
             emissiveTexture=tex_info("emissive"),
             alphaMode=alpha_mode,
@@ -278,7 +291,7 @@ class _GltfBuilder:
 
         self.gltf.materials.append(gmat)
 
-    def _build_pbr(self, val, tex_uri, tex_info, tex_repeat, texture_dir):
+    def _build_pbr(self, val, tex_uri, tex_info, tex_repeat, tex_rotation, texture_dir):
         """Build PbrMetallicRoughness from internal properties.
 
         ``values.color`` is sRGB-stored (matches three-cad-viewer's
@@ -310,10 +323,10 @@ class _GltfBuilder:
 
         if color_tex_uri and opacity_tex_uri:
             merged = _merge_opacity_into_color(color_tex_uri, opacity_tex_uri)
-            base_color_texture = self._make_tex_info(merged, "color", tex_repeat)
+            base_color_texture = self._make_tex_info(merged, "color", tex_repeat, tex_rotation)
         elif opacity_tex_uri:
             merged = _merge_opacity_into_color(None, opacity_tex_uri)
-            base_color_texture = self._make_tex_info(merged, "color", tex_repeat)
+            base_color_texture = self._make_tex_info(merged, "color", tex_repeat, tex_rotation)
         else:
             base_color_texture = tex_info("color")
 
@@ -333,7 +346,7 @@ class _GltfBuilder:
                     val("roughness") if val("roughness") is not None else 1.0,
                     texture_dir,
                 )
-                mr_ti = self._make_tex_info(packed_uri, "metallicRoughness", tex_repeat)
+                mr_ti = self._make_tex_info(packed_uri, "metallicRoughness", tex_repeat, tex_rotation)
 
         return PbrMetallicRoughness(
             baseColorFactor=base_color_factor or [1.0, 1.0, 1.0, 1.0],
@@ -343,17 +356,16 @@ class _GltfBuilder:
             metallicRoughnessTexture=mr_ti,
         )
 
-    def _make_tex_info(self, uri: str, name: str, tex_repeat) -> TextureInfo:
+    def _make_tex_info(self, uri: str, name: str, tex_repeat, tex_rotation=None) -> TextureInfo:
         """Create a TextureInfo from a data URI, with optional texture transform."""
         ti = TextureInfo(index=self._register_image(uri, name))
-        if tex_repeat is not None:
-            ti.extensions["KHR_texture_transform"] = {
-                "scale": list(tex_repeat),
-            }
+        transform = _texture_transform(tex_repeat, tex_rotation)
+        if transform is not None:
+            ti.extensions["KHR_texture_transform"] = transform
             self._extensions_used.add("KHR_texture_transform")
         return ti
 
-    def _build_normal(self, val, tex_uri, tex_repeat):
+    def _build_normal(self, val, tex_uri, tex_repeat, tex_rotation=None):
         """Build NormalMaterialTexture or return None."""
         uri = tex_uri("normal")
         if uri is None:
@@ -365,23 +377,21 @@ class _GltfBuilder:
             index=self._register_image(uri, "normal"),
             scale=scale if scale is not None else 1.0,
         )
-        if tex_repeat is not None:
-            nmt.extensions["KHR_texture_transform"] = {
-                "scale": list(tex_repeat),
-            }
+        transform = _texture_transform(tex_repeat, tex_rotation)
+        if transform is not None:
+            nmt.extensions["KHR_texture_transform"] = transform
             self._extensions_used.add("KHR_texture_transform")
         return nmt
 
-    def _build_occlusion(self, tex_uri, tex_repeat):
+    def _build_occlusion(self, tex_uri, tex_repeat, tex_rotation=None):
         """Build OcclusionTextureInfo or return None."""
         uri = tex_uri("ao")
         if uri is None:
             return None
         oti = OcclusionTextureInfo(index=self._register_image(uri, "ao"))
-        if tex_repeat is not None:
-            oti.extensions["KHR_texture_transform"] = {
-                "scale": list(tex_repeat),
-            }
+        transform = _texture_transform(tex_repeat, tex_rotation)
+        if transform is not None:
+            oti.extensions["KHR_texture_transform"] = transform
             self._extensions_used.add("KHR_texture_transform")
         return oti
 
@@ -1103,6 +1113,16 @@ def _from_gltf(
             return (s[0], s[1])
         return None
 
+    def _get_tex_rotation_from_info(ti) -> float | None:
+        """Extract KHR_texture_transform rotation (radians → degrees)."""
+        if ti is None:
+            return None
+        exts = getattr(ti, "extensions", None) or {}
+        transform = exts.get("KHR_texture_transform")
+        if transform and transform.get("rotation"):
+            return math.degrees(transform["rotation"])
+        return None
+
     result: dict[str, dict] = {}
 
     for mat_index, mat in enumerate(gltf.materials):
@@ -1251,8 +1271,9 @@ def _from_gltf(
         if "dispersion" in ext:
             val("dispersion", ext["dispersion"])
 
-        # --- Texture repeat from KHR_texture_transform ---
+        # --- Texture transform (scale + rotation) from KHR_texture_transform ---
         texture_repeat = None
+        texture_rotation = None
         for ti in [
             pbr.baseColorTexture if pbr else None,
             pbr.metallicRoughnessTexture if pbr else None,
@@ -1260,9 +1281,11 @@ def _from_gltf(
             mat.occlusionTexture,
             mat.emissiveTexture,
         ]:
-            tr = _get_tex_repeat_from_info(ti)
-            if tr is not None:
-                texture_repeat = tr
+            if texture_repeat is None:
+                texture_repeat = _get_tex_repeat_from_info(ti)
+            if texture_rotation is None:
+                texture_rotation = _get_tex_rotation_from_info(ti)
+            if texture_repeat is not None and texture_rotation is not None:
                 break
 
         name = mat.name or f"material_{mat_index}"
@@ -1283,6 +1306,8 @@ def _from_gltf(
         }
         if texture_repeat is not None:
             data["texture_repeat"] = texture_repeat
+        if texture_rotation is not None:
+            data["texture_rotation"] = texture_rotation
         result[name] = data
 
     if index is not None:
