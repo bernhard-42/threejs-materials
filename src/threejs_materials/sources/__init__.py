@@ -131,6 +131,18 @@ class _SourceLoader:
                 if key in properties:
                     properties[key]["value"] = v
 
+            # Side-loaded textures from sources whose .mtlx graph doesn't
+            # reference them (polyhaven AO is the canonical case).
+            if result.extra_textures and tex_dir is not None:
+                for prop_name, file_path in result.extra_textures.items():
+                    if not file_path.exists():
+                        continue
+                    try:
+                        rel = file_path.relative_to(tex_dir).as_posix()
+                    except ValueError:
+                        rel = file_path.name
+                    properties.setdefault(prop_name, {})["texture"] = rel
+
             # Copy texture files to persistent cache directory
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
             cache_tex_dir = cache_file.with_suffix("")  # strip .json

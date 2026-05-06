@@ -83,4 +83,26 @@ def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
         dst = tex_dir / tex_name
         dst.write_bytes(tex_resp.content)
 
-    return SourceResult(mtlx_path=mtlx_path, license=LICENSE, url=material_url(name))
+    # Side-load AO from the per-channel API: standard_surface has no AO
+    # input, so polyhaven omits it from the .mtlx, but the asset listing
+    # exposes a PNG at a parallel URL. We download it next to the other
+    # textures and let _SourceLoader merge it into the properties dict.
+    extra_textures: dict = {}
+    ao_url = (
+        data.get("AO", {}).get(resolution, {}).get("png", {}).get("url")
+    )
+    if ao_url:
+        ao_filename = Path(ao_url).name
+        ao_path = tex_dir / ao_filename
+        log.info("Downloading AO: %s", ao_filename)
+        ao_resp = requests.get(ao_url, headers=_HEADERS, timeout=120)
+        ao_resp.raise_for_status()
+        ao_path.write_bytes(ao_resp.content)
+        extra_textures["ao"] = ao_path
+
+    return SourceResult(
+        mtlx_path=mtlx_path,
+        license=LICENSE,
+        url=material_url(name),
+        extra_textures=extra_textures,
+    )

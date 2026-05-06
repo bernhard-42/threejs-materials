@@ -12,6 +12,7 @@ import threading
 from pathlib import Path
 from sys import platform
 
+import numpy as np
 from PIL import Image
 
 from threejs_materials.utils import ensure_materialx, ensure_openexr, _linear_to_srgb
@@ -44,6 +45,93 @@ def load_document_with_stdlib(mtlx_path: Path):
     if not valid:
         log.debug("Validation warnings: %s", msg)
     return doc, search_path
+
+
+def _iter_image_nodes(doc):
+    """Yield every <image>/<tiledimage> node in the document, both at the
+    top level and inside any nodegraph."""
+    for node in doc.getNodes():
+        if node.getCategory() in ("image", "tiledimage"):
+            yield node
+    for ng in doc.getNodeGraphs():
+        for node in ng.getNodes():
+            if node.getCategory() in ("image", "tiledimage"):
+                yield node
+
+
+def _exr_to_png(exr_path: Path, png_path: Path) -> None:
+    """Read an EXR file and write an 8-bit linear PNG with the same pixel
+    values (clipped to [0, 1], no gamma correction).
+
+    Polyhaven EXRs come in two layouts: single-channel ``Y`` (grayscale —
+    roughness, displacement) or ``RGBA`` (normals). Other layouts fall back
+    to per-channel R/G/B reads.
+    """
+    OpenEXR, _ = ensure_openexr()
+
+    with OpenEXR.File(str(exr_path)) as f:
+        channels = f.parts[0].channels
+        if "Y" in channels:
+            arr = channels["Y"].pixels
+            arr8 = (np.clip(arr, 0, 1) * 255 + 0.5).astype(np.uint8)
+            img = Image.fromarray(arr8, mode="L")
+        elif "RGBA" in channels:
+            arr = channels["RGBA"].pixels[..., :3]
+            arr8 = (np.clip(arr, 0, 1) * 255 + 0.5).astype(np.uint8)
+            img = Image.fromarray(arr8, mode="RGB")
+        elif "RGB" in channels:
+            arr = channels["RGB"].pixels[..., :3]
+            arr8 = (np.clip(arr, 0, 1) * 255 + 0.5).astype(np.uint8)
+            img = Image.fromarray(arr8, mode="RGB")
+        elif {"R", "G", "B"}.issubset(channels):
+            arr = np.stack(
+                [channels["R"].pixels, channels["G"].pixels, channels["B"].pixels],
+                axis=-1,
+            )
+            arr8 = (np.clip(arr, 0, 1) * 255 + 0.5).astype(np.uint8)
+            img = Image.fromarray(arr8, mode="RGB")
+        else:
+            raise NotImplementedError(
+                f"EXR has unrecognized channel layout: {list(channels.keys())}"
+            )
+
+    img.save(str(png_path), format="PNG")
+
+
+def _transcode_exr_inputs(doc, base_dir: Path) -> None:
+    """Rewrite any ``<image>`` node referencing a ``.exr`` file to use a
+    sibling ``.png`` instead, transcoding the file on disk if needed.
+
+    MaterialX 1.39's TextureBaker can't read EXR — when an image-node's
+    file points at an .exr, the baker silently falls back to the node's
+    ``<input name="default">`` value, turning a real texture into a flat
+    scalar. Pre-transcoding to 8-bit linear PNG keeps the bake honest.
+
+    A ``colorspace="lin_rec709"`` attribute is set on the rewritten file
+    input when none was already declared, so downstream tools don't gamma-
+    decode the linear data as if the PNG were sRGB.
+    """
+    mx = ensure_materialx()
+
+    for node in _iter_image_nodes(doc):
+        file_input = node.getInput("file")
+        if file_input is None:
+            continue
+        value = file_input.getValueString()
+        if not value or not value.lower().endswith(".exr"):
+            continue
+        exr_path = (base_dir / value).resolve()
+        if not exr_path.exists():
+            log.debug("EXR not on disk, skipping transcode: %s", exr_path)
+            continue
+        png_path = exr_path.with_suffix(".png")
+        if not png_path.exists():
+            _exr_to_png(exr_path, png_path)
+        new_value = value[: -len(".exr")] + ".png"
+        file_input.setValueString(new_value)
+        cs_attr = mx.Element.COLOR_SPACE_ATTRIBUTE
+        if not file_input.hasAttribute(cs_attr):
+            file_input.setColorSpace("lin_rec709")
 
 
 def bake_materials(
@@ -923,6 +1011,7 @@ def _process_mtlx(
     tex_dir = base_dir / "textures"
 
     doc, search_path = load_document_with_stdlib(mtlx_path)
+    _transcode_exr_inputs(doc, base_dir)
     orig_mats = extract_materials(doc)
 
     if not orig_mats:

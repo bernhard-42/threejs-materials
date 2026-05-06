@@ -18,3 +18,7 @@ class SourceResult:
     url: str = ""
     # Optional post-processing:
     overrides: dict = field(default_factory=dict)
+    # Textures the source has but the .mtlx graph doesn't reference
+    # (e.g. polyhaven's AO — standard_surface has no AO input).
+    # Maps property name → file path on disk under the source's tex_dir.
+    extra_textures: dict = field(default_factory=dict)

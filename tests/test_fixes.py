@@ -150,6 +150,152 @@ class TestSixteenBitTextures:
 
 
 # ---------------------------------------------------------------------------
+# Fix: EXR-format texture inputs lost through MaterialX TextureBaker
+#
+# MaterialX 1.39 TextureBaker can't read .exr files. When a polyhaven .mtlx
+# references EXR for normal/rough (their default format for those slots),
+# the baker silently falls back to the <input name="default"> scalar of
+# the image node — turning a real bake into a flat constant. _transcode_exr_inputs
+# pre-converts EXR → 8-bit linear PNG and rewrites the doc so the baker
+# sees a format it can process.
+# ---------------------------------------------------------------------------
+
+
+def _write_grayscale_exr(path, value=0.5, size=(8, 8)):
+    """Write a 4x4 single-channel ('Y') float16 EXR with a constant value."""
+    import OpenEXR
+    arr = np.full(size, value, dtype=np.float16)
+    hdr = {"compression": OpenEXR.ZIP_COMPRESSION, "type": OpenEXR.scanlineimage}
+    with OpenEXR.File(hdr, {"Y": arr}) as f:
+        f.write(str(path))
+
+
+def _write_rgba_exr(path, rgb=(0.5, 0.5, 1.0), size=(8, 8)):
+    """Write a 4x4 'RGBA' float16 EXR with a constant pixel value."""
+    import OpenEXR
+    arr = np.zeros((*size, 4), dtype=np.float16)
+    arr[..., 0] = rgb[0]
+    arr[..., 1] = rgb[1]
+    arr[..., 2] = rgb[2]
+    arr[..., 3] = 1.0
+    hdr = {"compression": OpenEXR.ZIP_COMPRESSION, "type": OpenEXR.scanlineimage}
+    with OpenEXR.File(hdr, {"RGBA": arr}) as f:
+        f.write(str(path))
+
+
+class TestExrTranscode:
+    def test_exr_to_png_grayscale(self, tmp_path):
+        """Single-channel ('Y') EXR transcodes to 8-bit grayscale PNG with
+        the same linear pixel value (0.5 → 128 ± 1)."""
+        from threejs_materials.convert import _exr_to_png
+        exr = tmp_path / "rough.exr"
+        png = tmp_path / "rough.png"
+        _write_grayscale_exr(exr, value=0.5)
+        _exr_to_png(exr, png)
+        img = Image.open(png)
+        assert img.mode == "L"
+        arr = np.array(img)
+        assert 127 <= arr.max() <= 129
+
+    def test_exr_to_png_rgba(self, tmp_path):
+        """RGBA EXR transcodes to 8-bit RGB PNG (alpha dropped)."""
+        from threejs_materials.convert import _exr_to_png
+        exr = tmp_path / "normal.exr"
+        png = tmp_path / "normal.png"
+        _write_rgba_exr(exr, rgb=(0.5, 0.5, 1.0))
+        _exr_to_png(exr, png)
+        img = Image.open(png)
+        assert img.mode == "RGB"
+        arr = np.array(img)
+        assert 127 <= arr[..., 0].max() <= 129
+        assert 127 <= arr[..., 1].max() <= 129
+        assert arr[..., 2].max() == 255
+
+    def test_transcode_exr_inputs_rewrites_doc(self, tmp_path):
+        """After running _transcode_exr_inputs, image nodes that referenced
+        .exr now reference .png, the .png exists on disk, and the file
+        input has colorspace='lin_rec709' set."""
+        from threejs_materials.convert import _transcode_exr_inputs, load_document_with_stdlib
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        _write_grayscale_exr(tex_dir / "rough.exr", value=0.3)
+        _write_rgba_exr(tex_dir / "normal.exr", rgb=(0.5, 0.5, 1.0))
+        mtlx = tmp_path / "m.mtlx"
+        mtlx.write_text("""<?xml version="1.0"?>
+<materialx version="1.39">
+  <nodegraph name="NG">
+    <image name="rough" type="float">
+      <input name="file" type="filename" value="textures/rough.exr" />
+    </image>
+    <image name="normal" type="vector3">
+      <input name="file" type="filename" value="textures/normal.exr" />
+    </image>
+  </nodegraph>
+</materialx>
+""")
+        doc, _ = load_document_with_stdlib(mtlx)
+        _transcode_exr_inputs(doc, tmp_path)
+
+        assert (tex_dir / "rough.png").exists()
+        assert (tex_dir / "normal.png").exists()
+
+        ng = doc.getNodeGraph("NG")
+        rough_file = ng.getNode("rough").getInput("file")
+        normal_file = ng.getNode("normal").getInput("file")
+        assert rough_file.getValueString() == "textures/rough.png"
+        assert normal_file.getValueString() == "textures/normal.png"
+        assert rough_file.getColorSpace() == "lin_rec709"
+        assert normal_file.getColorSpace() == "lin_rec709"
+
+    def test_transcode_preserves_existing_colorspace(self, tmp_path):
+        """When an .exr image already declares a colorspace, transcode must
+        not overwrite it."""
+        from threejs_materials.convert import _transcode_exr_inputs, load_document_with_stdlib
+        tex_dir = tmp_path / "textures"
+        tex_dir.mkdir()
+        _write_grayscale_exr(tex_dir / "rough.exr", value=0.3)
+        mtlx = tmp_path / "m.mtlx"
+        mtlx.write_text("""<?xml version="1.0"?>
+<materialx version="1.39">
+  <nodegraph name="NG">
+    <image name="rough" type="float">
+      <input name="file" type="filename" value="textures/rough.exr" colorspace="srgb_texture" />
+    </image>
+  </nodegraph>
+</materialx>
+""")
+        doc, _ = load_document_with_stdlib(mtlx)
+        _transcode_exr_inputs(doc, tmp_path)
+        rough_file = doc.getNodeGraph("NG").getNode("rough").getInput("file")
+        assert rough_file.getColorSpace() == "srgb_texture"  # unchanged
+
+
+# ---------------------------------------------------------------------------
+# Fix: SourceResult.extra_textures (e.g. polyhaven AO) merged into properties
+#
+# The .mtlx graph for polyhaven materials doesn't reference AO (no AO input
+# on standard_surface). Polyhaven exposes AO at a sibling URL; the loader
+# downloads it and lists it on SourceResult.extra_textures. _SourceLoader
+# merges those into the properties dict so they survive into the cache.
+# ---------------------------------------------------------------------------
+
+
+class TestExtraTextures:
+    def test_source_result_default(self):
+        """SourceResult.extra_textures defaults to an empty dict."""
+        from threejs_materials.sources.common import SourceResult
+        r = SourceResult()
+        assert r.extra_textures == {}
+
+    def test_extra_textures_field_carries_path(self):
+        """SourceResult accepts and stores arbitrary {prop_name: Path} entries."""
+        from pathlib import Path
+        from threejs_materials.sources.common import SourceResult
+        r = SourceResult(extra_textures={"ao": Path("/tmp/ao.png")})
+        assert r.extra_textures["ao"] == Path("/tmp/ao.png")
+
+
+# ---------------------------------------------------------------------------
 # Fix: transmissive materials appearing opaque (commit 7cb7b9d)
 #
 # PhysicallyBased source didn't emit metalness/color for transmissive
