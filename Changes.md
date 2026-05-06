@@ -8,12 +8,15 @@
 
 - **`override()` now preserves `texture_rotation`** — chained `mat.scale(rotation=90).override(color="red")` was silently dropping the rotation because the `override()` constructor call didn't propagate the new field.
 - **`interpolate_color()` respects override-applied color when a color texture is present** — `mat.override(color="red").interpolate_color()` previously ignored the override and returned the unmodified texture average, because the texture branch fired before the list-color branch. `values.color` (string or list) now tints the texture identically to passing `override_color=` directly: the result equals `mat.interpolate_color(override_color="red")` for the same input. The explicit `override_color=` argument still wins when both are set.
+- Fix handling 16bit texture inputs in metallicRoughness packing for glTF
+- MaterialX file from polyhaven contain exr files. Fix that exr textures got dropped by the baking process.
+- Ensure that polyhaven AO textures get exported by the baking process
 
 # v1.1.0
 
 ## Breaking changes
 
-- **`PbrProperties.values.color` is now sRGB-stored** (was linear). Matches three-cad-viewer's `setRGB(r, g, b, SRGBColorSpace)` consumption — the viewer linearizes internally, so storing sRGB byte ratios lets a numeric input like `(0.5, 0.5, 0.5)` mean perceptual midgray. glTF spec compliance is preserved by an `_srgb_to_linear` conversion at the `to_gltf()`/`from_gltf()` boundary (`baseColorFactor` remains linear on the wire). The `emissive`, `sheen_color`, `specular_color`, `attenuation_color` fields **remain linear** (matching glTF *Factor spec and Three.js's bare `new THREE.Color(r, g, b)` constructor convention).
+- **`PbrProperties.values.color` is now sRGB-stored** (was linear). Matches three-cad-viewer's `setRGB(r, g, b, SRGBColorSpace)` consumption — the viewer linearizes internally, so storing sRGB byte ratios lets a numeric input like `(0.5, 0.5, 0.5)` mean perceptual midgray. glTF spec compliance is preserved by an `_srgb_to_linear` conversion at the `to_gltf()`/`from_gltf()` boundary (`baseColorFactor` remains linear on the wire). The `emissive`, `sheen_color`, `specular_color`, `attenuation_color` fields **remain linear** (matching glTF \*Factor spec and Three.js's bare `new THREE.Color(r, g, b)` constructor convention).
 
   User impact: `mat.override(color=(0.2, 0.4, 0.6))` will render brighter than before with the same numeric input — same input now interpreted as sRGB. Hex strings like `"#ff8000"` are unaffected (sRGB at source).
 
