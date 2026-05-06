@@ -116,7 +116,7 @@ That gives you a clean, portable material workflow: procedural inside Blender, b
 
 - **Multiple materials supported** — `load_gltf()` and `from_gltf()` return a `dict[str, PbrProperties]` keyed by material name. A Blender export with multiple materials is loaded in a single call.
 - **Geometry is ignored** — only the material and its textures are imported. The mesh, nodes, and scene hierarchy are discarded.
-- **No UV transforms** — `KHR_texture_transform` on the Blender side (offset, rotation) is imported as `texture_repeat` for the scale component only. Offset and rotation are not supported.
+- **Partial UV transforms** — `KHR_texture_transform` scale and rotation are imported as `texture_repeat` and `texture_rotation`. Offset is not supported.
 - **glTF defaults applied** — when `metallicFactor` or `roughnessFactor` are absent, glTF defaults (1.0) are used. This is correct for texture-driven materials where the scalar is a neutral multiplier.
 - **Fully opaque alpha ignored** — when Blender exports `alphaMode: "BLEND"` but the baseColor texture alpha channel is entirely opaque (255 everywhere), the transparency flag is skipped. This is a common Blender export artifact.
 
@@ -349,17 +349,17 @@ Each output property maps to Three.js `MeshPhysicalMaterial` fields:
   gltf = collect_gltf_textures(materials)  # pygltflib.GLTF2
   ```
 
-- Texture repeat
+- Texture repeat and rotation
 
   `scale()` is exported as the `KHR_texture_transform` extension on each texture reference:
 
   ```python
-  tiled = mat.scale(2, 2)  # texture appears 2x larger
+  tiled = mat.scale(2, 2, rotation=90)  # 2x larger, 90° counterclockwise
   gltf = tiled.to_gltf()
-  # Each texture ref gets: "extensions": {"KHR_texture_transform": {"scale": [0.5, 0.5]}}
+  # Each texture ref: "extensions": {"KHR_texture_transform": {"scale": [0.5, 0.5], "rotation": 1.5708}}
   ```
 
-  Note: `scale(1, 1)` is a no-op for glTF export — no `KHR_texture_transform` extension is added.
+  Note: `scale(1, 1)` with no rotation is a no-op for glTF export — no `KHR_texture_transform` extension is added.
 
 ### Three.js ↔ glTF conversion
 
@@ -372,7 +372,7 @@ The glTF export is **visually lossless** for all properties except displacement.
 | Opacity texture                                    | Merged into `baseColorTexture` alpha channel — cannot be separated back                                            |
 | Separate metalness + roughness textures            | Packed into one `metallicRoughnessTexture` — comes back as same packed texture on both `metalness` and `roughness` |
 | `displacement` / `displacementScale`               | **Lost** — no glTF equivalent (see note below)                                                                     |
-| `texture_repeat` / `scale()`                       | Preserved via `KHR_texture_transform`                                                                              |
+| `texture_repeat` / `texture_rotation` / `scale()`  | Preserved via `KHR_texture_transform` (rotation in radians on the wire)                                            |
 | Source metadata (`id`, `source`, `url`, `license`) | Not stored in glTF; `from_gltf()` sets `source="gltf"`                                                             |
 
 **Round-trip example**
@@ -519,16 +519,17 @@ Displacement mapping is the only property fully lost in the glTF conversion. In 
 
   Overrides set the value of the named property, creating it if absent. Existing textures are preserved. Calls can be chained: `mat.override(color=(1,0,0)).override(roughness=0.5)`.
 
-- `material.scale(u, v, fixed=True) -> PbrProperties`
+- `material.scale(u, v, fixed=True, rotation=0.0) -> PbrProperties`
 
-  Return a new `PbrProperties` with texture scaling applied. The original material is not modified.
+  Return a new `PbrProperties` with texture scaling and rotation applied. The original material is not modified.
 
   ```python
-  tiled = mat.scale(3, 3)      # texture appears 3x larger
-  small = mat.scale(0.5, 0.5)  # texture tiles 2x in each direction
+  tiled = mat.scale(3, 3)                # texture appears 3x larger
+  small = mat.scale(0.5, 0.5)            # texture tiles 2x in each direction
+  rotated = mat.scale(2, 2, rotation=90) # 2x larger, rotated 90° counterclockwise
   ```
 
-  `scale(u, v)` sets `texture_repeat = (1/u, 1/v)` internally. In Three.js this maps to `texture.repeat`, in glTF it is exported as `KHR_texture_transform` with `scale: [1/u, 1/v]`. Can be chained with `override()`: `mat.override(color=(1,0,0)).scale(2, 2)`.
+  `scale(u, v)` sets `texture_repeat = (1/u, 1/v)` internally. `rotation` is in degrees, counterclockwise, pivoted at the texture center (0.5, 0.5). In Three.js these map to `texture.repeat` and `texture.rotation` (radians); in glTF they export as `KHR_texture_transform` with `scale` and `rotation`. Each call **replaces** the full transform — to combine, pass them in the same call. Can be chained with `override()`: `mat.override(color=(1,0,0)).scale(2, 2, rotation=45)`.
 
 #### Variant ids
 
