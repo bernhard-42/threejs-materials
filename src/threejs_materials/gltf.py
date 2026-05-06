@@ -98,10 +98,18 @@ def _pack_metallic_roughness(
     h, w = size[1], size[0]
     r_chan = np.zeros((h, w), dtype=np.uint8)
 
+    def _to_u8(chan):
+        # 16-bit textures (e.g. baked from EXR) come back as uint16; glTF MR
+        # textures are 8-bit by spec — downconvert at the boundary.
+        if chan.dtype == np.uint16:
+            return (chan // 257).astype(np.uint8)
+        return chan if chan.dtype == np.uint8 else chan.astype(np.uint8)
+
     if r_img:
         r_arr = np.array(r_img)
         # Three.js reads roughnessMap from the G channel
         g_chan = r_arr[:, :, 1] if r_arr.ndim == 3 else r_arr
+        g_chan = _to_u8(g_chan)
     else:
         g_chan = np.full((h, w), int(roughness_scalar * 255 + 0.5), dtype=np.uint8)
 
@@ -109,6 +117,7 @@ def _pack_metallic_roughness(
         m_arr = np.array(m_img)
         # Three.js reads metalnessMap from the B channel
         b_chan = m_arr[:, :, 2] if m_arr.ndim == 3 else m_arr
+        b_chan = _to_u8(b_chan)
     else:
         b_chan = np.full((h, w), int(metalness_scalar * 255 + 0.5), dtype=np.uint8)
 

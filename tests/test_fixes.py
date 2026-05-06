@@ -97,6 +97,59 @@ class TestOneBitTextures:
 
 
 # ---------------------------------------------------------------------------
+# Fix: 16-bit textures crash _pack_metallic_roughness
+#
+# Baker output for EXR-sourced inputs comes back as PIL mode "I;16" → uint16
+# numpy arrays. The packed RGB stack inherited that dtype, which PIL rejects
+# with `Cannot handle this data type: (H, W, 3), <u2`. glTF metallicRoughness
+# is 8-bit per spec; downconvert at the channel-extraction boundary.
+# ---------------------------------------------------------------------------
+
+
+def _make_16bit_png(tmp_path, name="u16.png", value=40000):
+    """Create a 16-bit single-channel PNG (mode 'I;16') and return its path."""
+    arr = np.full((4, 4), value, dtype=np.uint16)
+    img = Image.fromarray(arr, mode="I;16")
+    path = tmp_path / name
+    img.save(path)
+    return path
+
+
+class TestSixteenBitTextures:
+    def test_pack_metallic_roughness_with_16bit_inputs(self, tmp_path):
+        """uint16 metalness + uint16 roughness must produce an 8-bit MR PNG."""
+        m_path = _make_16bit_png(tmp_path, "m16.png", value=65535)  # full metalness
+        r_path = _make_16bit_png(tmp_path, "r16.png", value=32896)  # ~ 0.502
+        packed_uri = _pack_metallic_roughness(
+            metalness_ref=m_path.name,
+            roughness_ref=r_path.name,
+            metalness_scalar=1.0,
+            roughness_scalar=1.0,
+            texture_dir=tmp_path,
+        )
+        b64 = packed_uri.split(",", 1)[1]
+        img = Image.open(io.BytesIO(base64.b64decode(b64)))
+        assert img.mode == "RGB"
+        arr = np.array(img)
+        assert arr.dtype == np.uint8
+        # B channel = metalness ~255, G channel = roughness ~128 (32896 // 257 ≈ 128)
+        assert arr[:, :, 2].max() == 255
+        assert 120 < arr[:, :, 1].max() < 135
+
+    def test_pack_metallic_roughness_export_does_not_crash(self, tmp_path):
+        """End-to-end: a material with 16-bit metalness map exports without error."""
+        m_path = _make_16bit_png(tmp_path, "m16.png", value=65535)
+        mat = PbrProperties.from_dict({
+            "id": "u16", "name": "u16", "source": "test", "url": "", "license": "CC0",
+            "values": {"metalness": 1.0, "roughness": 0.5},
+            "textures": {"metalness": m_path.name},
+            "maps_dir": str(tmp_path),
+        })
+        gltf = mat.to_gltf()
+        assert gltf.materials[0].pbrMetallicRoughness.metallicRoughnessTexture is not None
+
+
+# ---------------------------------------------------------------------------
 # Fix: transmissive materials appearing opaque (commit 7cb7b9d)
 #
 # PhysicallyBased source didn't emit metalness/color for transmissive
