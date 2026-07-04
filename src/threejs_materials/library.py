@@ -282,7 +282,6 @@ class PbrProperties:
         ``resolution`` controls the baker's output texture dimensions.
         Accepts ``"1K"`` (default), ``"2K"``, ``"4K"``, or ``"8K"``.
         """
-        ensure_materialx()
         mtlx_path = Path(mtlx_file).resolve()
         if not mtlx_path.exists():
             raise FileNotFoundError(f"File not found: {mtlx_path}")
