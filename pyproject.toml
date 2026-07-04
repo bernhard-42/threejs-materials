@@ -13,6 +13,12 @@ dependencies = [
     "platformdirs >= 4.9.6, < 5.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/bernhard-42/threejs-materials"
+Repository = "https://github.com/bernhard-42/threejs-materials"
+Issues = "https://github.com/bernhard-42/threejs-materials/issues"
+Changelog = "https://github.com/bernhard-42/threejs-materials/blob/main/Changes.md"
+
 [project.optional-dependencies]
 # Required only to CONVERT materials from a source (from_gpuopen/from_ambientcg/
 # from_polyhaven/from_mtlx and the bundle generator). Bundled materials and all
