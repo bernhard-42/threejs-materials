@@ -39,7 +39,7 @@ class TestAmbientCgFallback:
 
         assert mock_get.call_count == 1
         assert "PNG" in mock_get.call_args_list[0].args[0]
-        assert result.mtlx_path.exists()
+        assert result.mtlx_path is not None and result.mtlx_path.exists()
 
     def test_png_404_falls_back_to_jpg(self, tmp_path):
         """PNG 404 → JPG retried and succeeds."""
@@ -51,7 +51,7 @@ class TestAmbientCgFallback:
         assert mock_get.call_count == 2
         assert "PNG" in mock_get.call_args_list[0].args[0]
         assert "JPG" in mock_get.call_args_list[1].args[0]
-        assert result.mtlx_path.exists()
+        assert result.mtlx_path is not None and result.mtlx_path.exists()
 
     def test_both_404_raises(self, tmp_path):
         """Both variants 404 → RuntimeError mentioning both attempts."""

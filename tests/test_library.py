@@ -1,11 +1,11 @@
 """Tests for threejs_materials.library — offline, no GPU."""
 
+import base64
 import json
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
+from conftest import _make_1x1_png
 from threejs_materials.library import PbrProperties
 from threejs_materials.sources import CACHE_DIR, _cache_path
 
@@ -262,6 +262,28 @@ class TestCreate:
         """sRGB 0x80 → 0.502 byte ratio (no gamma decode at this layer)."""
         mat = PbrProperties.create(id="t", color="#808080")
         assert mat.values.color == pytest.approx([0.5020, 0.5020, 0.5020], abs=1e-3)
+
+    def test_to_dict_color_space_asymmetry(self):
+        """to_dict() boundary contract consumed by three-cad-viewer:
+        `color` is sRGB byte ratios; `emissive`/`specularColor`/`sheenColor`/
+        `attenuationColor` are LINEAR. Same #ff8000 in → color keeps 0.502
+        (sRGB), the rest gamma-decode to ~0.216 (linear). Regression guard for
+        the orange→yellow bug: a consumer must apply `color` with SRGBColorSpace
+        and the other four as bare linear THREE.Color(r,g,b)."""
+        from threejs_materials.utils import _srgb_to_linear
+
+        srgb, lin = 0x80 / 255.0, _srgb_to_linear(0x80 / 255.0)
+        v = PbrProperties.create(
+            id="t",
+            color="#ff8000",
+            emissive="#ff8000",
+            specular_color="#ff8000",
+            sheen_color="#ff8000",
+            attenuation_color="#ff8000",
+        ).to_dict()["values"]
+        assert v["color"][1] == pytest.approx(srgb, abs=1e-3)  # sRGB
+        for k in ("emissive", "specularColor", "sheenColor", "attenuationColor"):
+            assert v[k][1] == pytest.approx(lin, abs=1e-3), k  # linear
 
     def test_color_4tuple_lifts_opacity(self):
         """A 4-tuple color sets opacity from the alpha component."""
@@ -980,7 +1002,7 @@ class TestPbrOverrides:
         o = PbrOverrides(color=(1, 0, 0))
         # Frozen → can't mutate
         with pytest.raises(Exception):  # FrozenInstanceError or AttributeError
-            o.color = (0, 1, 0)
+            o.color = (0, 1, 0)  # ty: ignore[invalid-assignment]  (frozen, tested)
         # Hashable → can be used as dict keys / in sets
         assert hash(o) is not None
 
@@ -1045,17 +1067,17 @@ class TestPbrOverrides:
                 return c
 
         # 3-tuple via subclass: stored as sRGB, no opacity lift
-        o = CustomPbrOverrides(color=CustomColor(0.5, 0.6, 0.7))
+        o = CustomPbrOverrides(color=CustomColor(0.5, 0.6, 0.7))  # ty: ignore[invalid-argument-type]
         assert o.color == (0.5, 0.6, 0.7)
         assert o.opacity is None
 
         # 4-tuple via subclass: alpha lifts into opacity (color field only)
-        o2 = CustomPbrOverrides(color=CustomColor(0.5, 0.6, 0.7, 0.4))
+        o2 = CustomPbrOverrides(color=CustomColor(0.5, 0.6, 0.7, 0.4))  # ty: ignore[invalid-argument-type]
         assert o2.color == (0.5, 0.6, 0.7)
         assert o2.opacity == 0.4
 
         # Linear field (emissive): alpha dropped silently, no opacity lift
-        o3 = CustomPbrOverrides(emissive=CustomColor(0.1, 0.2, 0.3, 0.9))
+        o3 = CustomPbrOverrides(emissive=CustomColor(0.1, 0.2, 0.3, 0.9))  # ty: ignore[invalid-argument-type]
         assert o3.emissive == (0.1, 0.2, 0.3)
         assert o3.opacity is None
 
@@ -1102,7 +1124,7 @@ class TestTextureTransform:
         from threejs_materials import TextureTransform
         t = TextureTransform(scale=(2.0, 2.0), rotation=45)
         with pytest.raises(Exception):
-            t.scale = (4.0, 4.0)
+            t.scale = (4.0, 4.0)  # ty: ignore[invalid-assignment]  (frozen, tested)
         assert hash(t) is not None
 
 
@@ -1381,11 +1403,6 @@ class TestClearCache:
 # ---------------------------------------------------------------------------
 # PbrProperties.to_gltf
 # ---------------------------------------------------------------------------
-
-# Tiny 1x1 PNG helper (reuse from conftest)
-from conftest import _make_1x1_png
-import base64
-
 
 def _b64_png(r=128, g=128, b=128):
     data = _make_1x1_png(r, g, b)

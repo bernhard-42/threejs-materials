@@ -60,9 +60,11 @@ class TestCollectGltfTextures:
         # Same texture → deduplicated to one image
         assert len(g.images) == 1
         # Both materials reference index 0
-        idx_a = g.materials[0].pbrMetallicRoughness.baseColorTexture.index
-        idx_b = g.materials[1].pbrMetallicRoughness.baseColorTexture.index
-        assert idx_a == idx_b == 0
+        pbr0 = g.materials[0].pbrMetallicRoughness
+        pbr1 = g.materials[1].pbrMetallicRoughness
+        assert pbr0 is not None and pbr0.baseColorTexture is not None
+        assert pbr1 is not None and pbr1.baseColorTexture is not None
+        assert pbr0.baseColorTexture.index == pbr1.baseColorTexture.index == 0
 
     def test_no_textures(self):
         mat = _sample(name="gold", values={"color": [1, 0.8, 0.3]})
@@ -101,7 +103,10 @@ class TestCollectGltfTextures:
         tex = _b64_png()
         mat = _sample(name="tiled", textures={"color": tex}).scale(2, 2)
         g = collect_gltf_textures({"tiled": mat})
-        bc_tex = g.materials[0].pbrMetallicRoughness.baseColorTexture
+        pbr = g.materials[0].pbrMetallicRoughness
+        assert pbr is not None and pbr.baseColorTexture is not None
+        bc_tex = pbr.baseColorTexture
+        assert bc_tex.extensions is not None
         assert bc_tex.extensions["KHR_texture_transform"]["scale"] == [0.5, 0.5]
         assert "KHR_texture_transform" in g.extensionsUsed
 
@@ -364,12 +369,13 @@ class TestRoundTrip:
         g1 = mat.to_gltf()
         imported = next(iter(PbrProperties.from_gltf(g1).values()))
         g2 = imported.to_gltf()
-        m1 = g1.materials[0]
-        m2 = g2.materials[0]
-        assert m1.pbrMetallicRoughness.baseColorFactor == m2.pbrMetallicRoughness.baseColorFactor
-        assert m1.pbrMetallicRoughness.metallicFactor == m2.pbrMetallicRoughness.metallicFactor
-        assert m1.pbrMetallicRoughness.roughnessFactor == m2.pbrMetallicRoughness.roughnessFactor
-        assert m1.extensions == m2.extensions
+        pbr1 = g1.materials[0].pbrMetallicRoughness
+        pbr2 = g2.materials[0].pbrMetallicRoughness
+        assert pbr1 is not None and pbr2 is not None
+        assert pbr1.baseColorFactor == pbr2.baseColorFactor
+        assert pbr1.metallicFactor == pbr2.metallicFactor
+        assert pbr1.roughnessFactor == pbr2.roughnessFactor
+        assert g1.materials[0].extensions == g2.materials[0].extensions
 
     def test_color_midgray_round_trips_losslessly(self):
         """sRGB midgray exercises the gamma curve in both directions —

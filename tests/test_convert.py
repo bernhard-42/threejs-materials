@@ -1,7 +1,6 @@
 """Tests for threejs_materials.convert — offline, no GPU."""
 
 import logging
-from pathlib import Path
 
 import MaterialX as mx
 import pytest
@@ -873,7 +872,7 @@ class TestUnknownShaderModel:
             "textures": {},
         }
         with caplog.at_level(logging.WARNING, logger="threejs_materials.convert"):
-            props = to_threejs_physical(mat, tmp_path)
+            to_threejs_physical(mat, tmp_path)
         assert any("Unsupported shader model" in r.message for r in caplog.records)
 
     def test_unknown_model_still_maps_displacement(self, tmp_path, tiny_png):

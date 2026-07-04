@@ -4,6 +4,7 @@ Each test documents which bug it covers so regressions are caught early.
 """
 
 import base64
+import importlib.util
 import io
 
 import numpy as np
@@ -17,7 +18,7 @@ from threejs_materials.gltf import (
     inject_materials,
 )
 from threejs_materials.library import PbrProperties
-from threejs_materials.models import PbrMaps, PbrValues
+from threejs_materials.models import PbrValues
 from threejs_materials.utils import _open_texture_image, _resolve_to_data_uri
 
 
@@ -146,7 +147,8 @@ class TestSixteenBitTextures:
             "maps_dir": str(tmp_path),
         })
         gltf = mat.to_gltf()
-        assert gltf.materials[0].pbrMetallicRoughness.metallicRoughnessTexture is not None
+        pbr = gltf.materials[0].pbrMetallicRoughness
+        assert pbr is not None and pbr.metallicRoughnessTexture is not None
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +186,13 @@ def _write_rgba_exr(path, rgb=(0.5, 0.5, 1.0), size=(8, 8)):
 
 
 class TestExrTranscode:
+    """EXR transcode path — only runs when the optional openexr dep is installed."""
+
+    pytestmark = pytest.mark.skipif(
+        importlib.util.find_spec("OpenEXR") is None,
+        reason="openexr is an optional dependency and is not installed",
+    )
+
     def test_exr_to_png_grayscale(self, tmp_path):
         """Single-channel ('Y') EXR transcodes to 8-bit grayscale PNG with
         the same linear pixel value (0.5 → 128 ± 1)."""
@@ -318,6 +327,7 @@ class TestTransmissiveMaterials:
         )
         gltf = mat.to_gltf()
         pbr = gltf.materials[0].pbrMetallicRoughness
+        assert pbr is not None
         assert pbr.metallicFactor == 0.0
 
     def test_transmissive_has_base_color_in_gltf(self):
@@ -327,7 +337,9 @@ class TestTransmissiveMaterials:
             values=PbrValues(color=[1, 1, 1], transmission=1.0, ior=1.5),
         )
         gltf = mat.to_gltf()
-        bcf = gltf.materials[0].pbrMetallicRoughness.baseColorFactor
+        pbr = gltf.materials[0].pbrMetallicRoughness
+        assert pbr is not None
+        bcf = pbr.baseColorFactor
         assert bcf is not None
         assert bcf[:3] == [1, 1, 1]
 
@@ -339,6 +351,7 @@ class TestTransmissiveMaterials:
         )
         gltf = mat.to_gltf()
         exts = gltf.materials[0].extensions
+        assert exts is not None
         assert "KHR_materials_dispersion" in exts
         assert "KHR_materials_volume" in exts
 
@@ -349,7 +362,9 @@ class TestTransmissiveMaterials:
             values=PbrValues(transmission=1.0, dispersion=0.5, ior=1.5),
         )
         gltf = mat.to_gltf()
-        volume = gltf.materials[0].extensions["KHR_materials_volume"]
+        exts = gltf.materials[0].extensions
+        assert exts is not None
+        volume = exts["KHR_materials_volume"]
         assert volume["thicknessFactor"] == 0
 
     def test_explicit_volume_not_overwritten_by_dispersion(self):
@@ -359,7 +374,9 @@ class TestTransmissiveMaterials:
             values=PbrValues(transmission=1.0, dispersion=0.5, ior=1.5, thickness=2.0),
         )
         gltf = mat.to_gltf()
-        volume = gltf.materials[0].extensions["KHR_materials_volume"]
+        exts = gltf.materials[0].extensions
+        assert exts is not None
+        volume = exts["KHR_materials_volume"]
         assert volume["thicknessFactor"] == 2.0
 
 
@@ -380,10 +397,11 @@ class TestInjectMaterialsNameCollision:
         gltf = collect_gltf_textures({"a": mat_a, "b": mat_b})
         assert len(gltf.materials) == 2
 
-        colors = [
-            m.pbrMetallicRoughness.baseColorFactor[:3]
-            for m in gltf.materials
-        ]
+        colors = []
+        for m in gltf.materials:
+            pbr = m.pbrMetallicRoughness
+            assert pbr is not None and pbr.baseColorFactor is not None
+            colors.append(pbr.baseColorFactor[:3])
         assert [1, 0, 0] in colors
         assert [0, 1, 0] in colors
 
@@ -724,14 +742,14 @@ class TestInjectMaterialsRoundTrip:
         red_normal_hash = _img_hash(red.normalTexture)
         green_normal_hash = _img_hash(green.normalTexture)
         assert red_normal_hash == expected_hashes["normal"], \
-            f"red_metal normal texture hash mismatch"
+            "red_metal normal texture hash mismatch"
         assert green_normal_hash == expected_hashes["normal"], \
-            f"green_plastic normal texture hash mismatch"
+            "green_plastic normal texture hash mismatch"
 
         # Color texture on green: should match original
         green_color_hash = _img_hash(green.pbrMetallicRoughness.baseColorTexture)
         assert green_color_hash == expected_hashes["color"], \
-            f"green_plastic color texture hash mismatch"
+            "green_plastic color texture hash mismatch"
 
         # MR texture: packed from roughness + metalness scalar. Can't compare
         # against source bytes (packing creates new PNG), but verify the image
@@ -825,12 +843,7 @@ class TestInjectMaterialsRoundTrip:
 
 
 def _materialx_available():
-    try:
-        from threejs_materials.utils import ensure_materialx
-        ensure_materialx()
-        return True
-    except ImportError:
-        return False
+    return importlib.util.find_spec("MaterialX") is not None
 
 
 class TestAlwaysBakeProcedural:
@@ -937,7 +950,6 @@ class TestSilentFailures:
 
     def test_empty_material_not_cached(self, tmp_path, monkeypatch):
         """_SourceLoader.load must not write empty materials to cache."""
-        from threejs_materials.sources import CACHE_DIR
 
         monkeypatch.setattr("threejs_materials.sources.CACHE_DIR", tmp_path)
 
