@@ -20,10 +20,6 @@ Supported input formats:
 </tr>
 </table>
 
-## Migration from v0.x to v1.X
-
-v1.0.0 is a **breaking change**. The `Material` class has been replaced by typed dataclasses. See [Migration details](#migration-details) for a full guide.
-
 ## Installation
 
 ### glTF support
@@ -34,33 +30,71 @@ pip install threejs-materials
 # uv add threejs-materials
 ```
 
-**Dependencies**
+**Core dependencies** (all pure Python)
 
-- `pillow >= 10.0` — image processing
-- `pygltflib >= 1.16` — glTF 2.0 file I/O (pure Python)
-- `requests >= 2.31.0` — HTTP downloads from material sources
+- `pillow` — image processing
+- `pygltflib` — glTF 2.0 file I/O
+- `requests` — HTTP downloads from material sources
+- `platformdirs` — cache directory location
 
-This allows you to
+The core install gives you the [bundled materials](#bundled-materials), glTF import/export, and material injection — **no MaterialX required**. It lets you
 
-- import materials from `*.gltf` and `*.glb` files (e.g. baked materials from blender)
+- use the ready-made [bundled materials](#bundled-materials)
+- import materials from `*.gltf` and `*.glb` files (e.g. baked materials from Blender)
 - export materials in the internal format to `*.gltf` and `*.glb` files
 - inject materials into glTF exports
 
 ### MaterialX support (optional)
 
+MaterialX is only needed to **convert** materials from a source (`from_gpuopen` / `from_ambientcg` / `from_polyhaven` / `from_mtlx`) or to regenerate the bundle. Install it with the extra:
+
 ```bash
-pip install threejs-materials[materialx]
-# uv pip install threejs-materials[materialx]
-# uv add --extra materialx threejs-materials
+pip install "threejs-materials[materialx]"
 ```
 
-**Additional dependencies**
+- `materialx == 1.39.5` — MaterialX SDK with TextureBaker
 
-- `materialx >= 1.39.4` — MaterialX SDK with TextureBaker
-- `openexr >= 3.3` — EXR to PNG conversion
+MaterialX is imported **lazily**: `import threejs_materials`, the [bundled materials](#bundled-materials), and glTF import/export all work without it. Only the conversion functions import MaterialX, and they raise a clear `ImportError` (pointing at the `[materialx]` extra) if it is not installed.
 
-This lets you download MaterialX files from the [MaterialX sources](#sources) and bake them into the internal format.
-However, for the latest Python, the installer tries to compile materialx and openexr. This might not be possible under Windows if no compiler is installed.
+## Bundled materials
+
+A curated set of ready-to-use PBR materials ships with the library. They need **no MaterialX and no network**: they are pre-converted and load instantly. Materials are grouped into category modules you import by name — keeps editor autocomplete/go-to-definition working and doesn't swamp your namespace:
+
+| Module    | Materials                                                                                                  |
+| --------- | ---------------------------------------------------------------------------------------------------------- |
+| `wood`    | ash, beech, birch, maple, mdf, oak, osb, spruce, walnut                                                    |
+| `metal`   | aluminum, brass, bronze, copper, gold, silver, stainless (each + `_brushed` / `_matte`), aluminum_anodized |
+| `coats`   | chrome, colored_coat_matte, colored_coat_gloss                                                             |
+| `plastic` | acrylic, plastic_clean, plastic_rough                                                                      |
+| `glass`   | glass                                                                                                      |
+| `paper`   | corrugated_cardboard, foamboard, paper                                                                     |
+| `textile` | fabric_weave, fabric_knit, felt, leather                                                                   |
+
+```python
+from threejs_materials import wood, metal, glass
+
+wood.ash()
+metal.gold_brushed()
+```
+
+Each material is a **factory function**: calling it returns a fresh `PbrProperties`. The signature exposes only the overrides that make sense for that material, so autocomplete guides you to valid options:
+
+- `color` — colorable materials (raw metals omit it; their colour is intrinsic)
+- `roughness` — overall smoother/rougher dial
+- `scale=(u, v)` — textured materials only
+- `rotation` — degrees, textured materials only
+- `thickness` — transmissive materials only (glass, acrylic)
+
+```python
+metal.gold()                               # no color override — colour is intrinsic
+metal.gold_brushed(scale=(2, 2))           # textured metal
+metal.aluminum_anodized(color="#0044cc")   # dyed aluminium
+glass.glass(color="#88ccff", thickness=5)  # tinted glass, volumetric refraction
+textile.fabric_weave(color="red", scale=(3, 3))
+wood.oak(color="#3a1f10", rotation=90)     # stained + rotated grain
+```
+
+Each module's `__all__` lists its materials. Materials hold texture-file references, so importing a module is cheap — no texture bytes are read until you export a specific material. To convert your **own** materials from a source instead of using the bundle, install the [`[materialx]` extra](#materialx-support-optional).
 
 ## Input Formats
 
@@ -138,9 +172,8 @@ When a material is loaded the following steps are executed:
 1. **Download** — source-specific: fetch ZIP (ambientCG, GPUOpen), individual files (PolyHaven), or generate from parameters (PhysicallyBased)
 2. **Bake** — run MaterialX `TextureBaker` (GLSL preferred, MSL fallback on macOS) to flatten procedural graphs into texture images
 3. **Fallback merge** — if the baker can't handle certain textures, merge from the original document
-4. **EXR to PNG** — convert any EXR textures to 8-bit PNG
-5. **Extract** — map shader inputs to `MeshPhysicalMaterial` properties with texture file references
-6. **Cache** — write JSON + texture files to `~/.materialx-cache/`
+4. **Extract** — map shader inputs to `MeshPhysicalMaterial` properties with texture file references
+5. **Cache** — write JSON + texture files to `~/.materialx-cache/`
 
 Converted materials are cached in `~/.materialx-cache/` as a small JSON file (property values + texture filenames) plus a companion directory with the texture images:
 
@@ -204,10 +237,6 @@ Anisotropy is only mapped for `gltf_pbr`, where `anisotropy_strength` correspond
 - Image tracing
   - **Single upstream image** — `find_upstream_image` returns the first image node found when walking upstream. Complex graphs with multiple images (layered blends, channel packing before baking) will only capture one image. After baking, this is fine since the baker flattens everything to single `<image>` nodes.
   - **No channel extraction tracking** — when an image passes through `extract` or `swizzle` nodes, the specific channel being used is not recorded. The consumer must know glTF metallicRoughness packing conventions (G=roughness, B=metalness).
-
-- EXR conversion
-  - **LDR clamp** — EXR textures are clamped to [0,1] and converted to 8-bit PNG. Dynamic range beyond 1.0 is lost.
-  - **Channel naming** — EXR files with non-standard channel names (not R/G/B/A) fall back to source-order channel selection, which may produce incorrect color mappings for unusual EXR layouts.
 
 - Network
   - **No retry logic** — a single network failure raises an exception. The caller is responsible for retries.
@@ -660,7 +689,7 @@ The `normalize_uvs` flag is serialized in `to_dict()` as `"normalizeUvs": false`
 
 - `encode_texture_base64(file_path) -> str`
 
-  Encode an image file as a base64 data URI. Automatically converts EXR to PNG.
+  Encode an image file as a base64 data URI.
 
   ```python
   from threejs_materials import encode_texture_base64
@@ -753,7 +782,7 @@ Alternatively, when injecting materials into an existing glTF file (e.g. from bu
 - **Color space convention** (asymmetric — both for textures and scalars):
   - **Textures**: include a `colorSpace` field when available. Three.js expects color textures (baseColor, emissive, sheenColor, specularColor) in **sRGB** and data textures (roughness, metalness, normal, AO, displacement) in **linear**. Set `texture.colorSpace` accordingly.
   - **Scalar `values.color`**: stored as **sRGB byte ratios** in [0, 1]. Three.js renders it via `setRGB(r, g, b, SRGBColorSpace)` (the viewer linearizes internally). A numeric tuple like `(0.5, 0.5, 0.5)` means perceptual midgray. Hex/named strings are sRGB at source.
-  - **Scalar `values.emissive` / `sheen_color` / `specular_color` / `attenuation_color`**: stored as **linear RGB** in [0, 1]. Matches the glTF *Factor spec and Three.js's bare `new THREE.Color(r, g, b)` constructor convention. A numeric tuple `(0.5, 0.5, 0.5)` here means linear midgray (renders as ~73% sRGB perceptually). Hex strings on these fields are gamma-decoded.
+  - **Scalar `values.emissive` / `sheen_color` / `specular_color` / `attenuation_color`**: stored as **linear RGB** in [0, 1]. Matches the glTF \*Factor spec and Three.js's bare `new THREE.Color(r, g, b)` constructor convention. A numeric tuple `(0.5, 0.5, 0.5)` here means linear midgray (renders as ~73% sRGB perceptually). Hex strings on these fields are gamma-decoded.
   - glTF export converts `values.color` sRGB→linear at the boundary (`baseColorFactor` is linear per spec); the other color fields are passed through unchanged (already linear). `from_gltf` does the inverse.
   - **Client-facing APIs** (`override()`, `create()`, `from_pymat()`, `PbrOverrides`) accept the same per-field convention. Numeric tuples for `color` are sRGB; numeric tuples for `emissive` / `sheen_color` / `specular_color` / `attenuation_color` are linear. Hex/CSS strings are always sRGB at source and get gamma-decoded only for the linear-stored fields. A 4th-element alpha (or `#rrggbbaa`) on `color` lifts into the separate `opacity` field — explicit `opacity=` wins.
 - **Normal maps**: Baked using the OpenGL convention (Y-up), matching Three.js and glTF expectations.
@@ -835,3 +864,7 @@ The cache format changed from `"properties"` to `"values"` + `"textures"`. After
 from threejs_materials import clear_cache
 clear_cache()
 ```
+
+## Migration from v0.x to v1.X
+
+v1.0.0 is a **breaking change**. The `Material` class has been replaced by typed dataclasses. See [Migration details](#migration-details) for a full guide.

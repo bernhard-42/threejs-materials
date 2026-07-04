@@ -14,7 +14,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-materialx = ["materialx>=1.39.4", "openexr>=3.3"]
+# Required only to CONVERT materials from a source (from_gpuopen/from_ambientcg/
+# from_polyhaven/from_mtlx and the bundle generator). Bundled materials and all
+# load/serialize paths work without it.
+materialx = ["materialx == 1.39.5"]
 dev = ["bump-my-version", "twine", "build", "pytest", "mypy", "types-requests"]
 
 [build-system]
@@ -23,6 +26,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Bundled material textures shipped in the wheel (loaded lazily at use time).
+"threejs_materials.pbr_properties" = ["_assets/**/*.png"]
 
 # bump-my-version settings
 
@@ -52,3 +59,12 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ty.environment]
+# typings/ holds minimal stubs for the untyped C-extension deps
+# (MaterialX, OpenEXR, Imath) — mirrors the [tool.mypy.overrides] above.
+extra-paths = ["typings"]
+
+[tool.ty.src]
+# examples/ is demo code, not part of the shipped package (see packages.find)
+exclude = ["examples"]
