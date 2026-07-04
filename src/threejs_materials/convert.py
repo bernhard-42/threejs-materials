@@ -1026,8 +1026,6 @@ def _process_mtlx(
             orig_mats[0]["name"],
         )
 
-    has_textures = any(m["textures"] for m in orig_mats)
-
     # Always bake: even materials without textures may have procedural
     # node graphs (e.g. GPUOpen "Brass") whose colors are only resolved
     # by the TextureBaker.
