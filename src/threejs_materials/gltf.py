@@ -189,6 +189,16 @@ class _GltfBuilder:
         self._uri_to_index: dict[str, int] = {}
         self._extensions_used: set[str] = set()
 
+    def _apply_tex_transform(self, ti, tex_repeat, tex_rotation=None) -> None:
+        """Attach a KHR_texture_transform extension to a texture-info object."""
+        transform = _texture_transform(tex_repeat, tex_rotation)
+        if transform is None:
+            return
+        if ti.extensions is None:
+            ti.extensions = {}
+        ti.extensions["KHR_texture_transform"] = transform
+        self._extensions_used.add("KHR_texture_transform")
+
     def _register_image(self, uri: str, name: str | None = None) -> int:
         """Add a data-URI image (deduplicated) and return its texture index."""
         h = hashlib.sha256(uri.encode("ascii", errors="replace")).hexdigest()
@@ -253,10 +263,7 @@ class _GltfBuilder:
             if uri is None:
                 return None
             ti = TextureInfo(index=self._register_image(uri, prop_name))
-            transform = _texture_transform(tex_repeat, tex_rotation)
-            if transform is not None:
-                ti.extensions["KHR_texture_transform"] = transform
-                self._extensions_used.add("KHR_texture_transform")
+            self._apply_tex_transform(ti, tex_repeat, tex_rotation)
             return ti
 
         pbr = self._build_pbr(val, tex_uri, tex_info, tex_repeat, tex_rotation, texture_dir)
@@ -368,10 +375,7 @@ class _GltfBuilder:
     def _make_tex_info(self, uri: str, name: str, tex_repeat, tex_rotation=None) -> TextureInfo:
         """Create a TextureInfo from a data URI, with optional texture transform."""
         ti = TextureInfo(index=self._register_image(uri, name))
-        transform = _texture_transform(tex_repeat, tex_rotation)
-        if transform is not None:
-            ti.extensions["KHR_texture_transform"] = transform
-            self._extensions_used.add("KHR_texture_transform")
+        self._apply_tex_transform(ti, tex_repeat, tex_rotation)
         return ti
 
     def _build_normal(self, val, tex_uri, tex_repeat, tex_rotation=None):
@@ -386,10 +390,7 @@ class _GltfBuilder:
             index=self._register_image(uri, "normal"),
             scale=scale if scale is not None else 1.0,
         )
-        transform = _texture_transform(tex_repeat, tex_rotation)
-        if transform is not None:
-            nmt.extensions["KHR_texture_transform"] = transform
-            self._extensions_used.add("KHR_texture_transform")
+        self._apply_tex_transform(nmt, tex_repeat, tex_rotation)
         return nmt
 
     def _build_occlusion(self, tex_uri, tex_repeat, tex_rotation=None):
@@ -398,10 +399,7 @@ class _GltfBuilder:
         if uri is None:
             return None
         oti = OcclusionTextureInfo(index=self._register_image(uri, "ao"))
-        transform = _texture_transform(tex_repeat, tex_rotation)
-        if transform is not None:
-            oti.extensions["KHR_texture_transform"] = transform
-            self._extensions_used.add("KHR_texture_transform")
+        self._apply_tex_transform(oti, tex_repeat, tex_rotation)
         return oti
 
     def _build_extensions(self, val, tex_uri, tex_info) -> dict:
@@ -570,7 +568,7 @@ def _embed_data_uri_images(gltf: GLTF2) -> None:
             )
 
             image.bufferView = bv_index
-            image.uri = None
+            image.uri = None  # ty: ignore[invalid-assignment]  (pygltflib types uri as str)
 
     gltf.set_binary_blob(blob)
     if gltf.buffers:
@@ -651,6 +649,7 @@ _TYPE_COUNTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
 def _read_accessor(gltf: GLTF2, accessor_idx: int) -> np.ndarray:
     """Read a glTF accessor into a numpy array."""
     acc = gltf.accessors[accessor_idx]
+    assert acc.bufferView is not None
     bv = gltf.bufferViews[acc.bufferView]
     blob = gltf.binary_blob()
     dtype = _COMPONENT_DTYPES[acc.componentType]
@@ -676,6 +675,7 @@ def _read_accessor(gltf: GLTF2, accessor_idx: int) -> np.ndarray:
 def _write_accessor(gltf: GLTF2, accessor_idx: int, data: np.ndarray) -> None:
     """Write a numpy array back into a glTF accessor's buffer."""
     acc = gltf.accessors[accessor_idx]
+    assert acc.bufferView is not None
     bv = gltf.bufferViews[acc.bufferView]
     dtype = _COMPONENT_DTYPES[acc.componentType]
     n_components = _TYPE_COUNTS[acc.type]
@@ -1188,7 +1188,7 @@ def _from_gltf(
         if mat.occlusionTexture is not None:
             tex("ao", mat.occlusionTexture.index)
 
-        if mat.emissiveFactor != [0.0, 0.0, 0.0]:
+        if mat.emissiveFactor and mat.emissiveFactor != [0.0, 0.0, 0.0]:
             val("emissive", list(mat.emissiveFactor))
         if mat.emissiveTexture is not None:
             tex("emissive", mat.emissiveTexture.index)
@@ -1298,7 +1298,7 @@ def _from_gltf(
                 break
 
         name = mat.name or f"material_{mat_index}"
-        data = {
+        data: dict = {
             "id": name,
             "name": name,
             "source": "gltf",
