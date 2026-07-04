@@ -1,4 +1,4 @@
-"""Shared utilities for lazy dependency loading, data URIs, and image helpers."""
+"""Shared utilities for optional dependencies, data URIs, and image helpers."""
 
 import base64
 import io
