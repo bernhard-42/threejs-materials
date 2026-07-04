@@ -7,9 +7,9 @@ import hashlib
 import json
 import logging
 import math
-import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import overload
 
 from pygltflib import GLTF2
 
@@ -24,6 +24,7 @@ from threejs_materials.gltf import (
     save_gltf as _save_gltf,
 )
 from threejs_materials.models import PbrMaps, PbrValues
+from threejs_materials.sources import ambientcg, gpuopen, polyhaven
 from threejs_materials.utils import (
     _abbreviate_textures,
     _is_data_uri,
@@ -233,6 +234,13 @@ class PbrProperties:
         }
         return cls.from_dict(new_dict)
 
+    @overload
+    @classmethod
+    def from_gltf(cls, gltf: GLTF2, index: None = None) -> dict[str, PbrProperties]: ...
+    @overload
+    @classmethod
+    def from_gltf(cls, gltf: GLTF2, index: int) -> PbrProperties: ...
+
     @classmethod
     def from_gltf(
         cls,
@@ -249,6 +257,13 @@ class PbrProperties:
         if isinstance(result, dict) and not any(k in result for k in ("id", "name")):
             return {name: cls.from_dict(data) for name, data in result.items()}
         return cls.from_dict(result)
+
+    @overload
+    @classmethod
+    def load_gltf(cls, gltf_file: str, index: None = None) -> dict[str, PbrProperties]: ...
+    @overload
+    @classmethod
+    def load_gltf(cls, gltf_file: str, index: int) -> PbrProperties: ...
 
     @classmethod
     def load_gltf(
@@ -324,6 +339,24 @@ class PbrProperties:
         from threejs_materials.sources import _SOURCE_LOADERS
 
         return cls.from_dict(_SOURCE_LOADERS["polyhaven"].load(name, resolution))
+
+    @classmethod
+    def download_gpuopen(cls, name: str, dest: str = ".", resolution: str = "1K") -> None:
+        """Download and unzip a GPUOpen MaterialX (.mtlx + textures), hierarchy
+        unchanged, into ``<dest>/<normalized_name>/``."""
+        gpuopen.download(name, resolution, Path(dest))
+
+    @classmethod
+    def download_ambientcg(cls, name: str, dest: str = ".", resolution: str = "1K") -> None:
+        """Download and unzip an ambientCG MaterialX (.mtlx + textures), hierarchy
+        unchanged, into ``<dest>/<normalized_name>/``."""
+        ambientcg.download(name, resolution, Path(dest))
+
+    @classmethod
+    def download_polyhaven(cls, name: str, dest: str = ".", resolution: str = "1K") -> None:
+        """Download a PolyHaven MaterialX (.mtlx + textures) into
+        ``<dest>/<normalized_name>/``, preserving the .mtlx's include paths."""
+        polyhaven.download(name, resolution, Path(dest))
 
     @classmethod
     def from_physicallybased(cls, name: str, resolution: str = "1K") -> PbrProperties:
@@ -682,6 +715,65 @@ class PbrProperties:
             texture_rotation=rotation if rotation else None,
             normalize_uvs=fixed,
             maps_dir=self.maps_dir,
+        )
+
+    def with_maps(
+        self,
+        other: PbrProperties,
+        *,
+        only: tuple[str, ...] = ("normal", "roughness"),
+    ) -> PbrProperties:
+        """Return a copy of self (scalar values kept) that adopts named texture
+        maps from *other*.
+
+        Grafts a surface texture onto a scalar base — e.g. a brushed-metal
+        normal/roughness set onto a solid metal's PBR values. *only* names the
+        :class:`PbrMaps` fields to pull. self must not already carry file-based
+        maps in a directory other than *other*'s.
+        """
+        new_maps = copy.deepcopy(self.maps)
+        picked: dict[str, str] = {}
+        for name in only:
+            ref = getattr(other.maps, name, None)
+            if ref is None:
+                raise ValueError(f"{other.id!r} has no {name!r} map to adopt")
+            setattr(new_maps, name, ref)
+            picked[name] = ref
+
+        other_needs_dir = any(not _is_data_uri(r) for r in picked.values())
+        self_file_maps = any(not _is_data_uri(r) for r in self.maps.to_dict().values())
+        if other_needs_dir and self_file_maps and self.maps_dir != other.maps_dir:
+            raise ValueError("cannot combine file-based maps from two directories")
+        maps_dir = other.maps_dir if other_needs_dir else self.maps_dir
+
+        return PbrProperties(
+            id=self.id,
+            name=self.name,
+            source=self.source,
+            url=self.url,
+            license=self.license,
+            values=copy.deepcopy(self.values),
+            maps=new_maps,
+            texture_repeat=self.texture_repeat,
+            texture_rotation=self.texture_rotation,
+            normalize_uvs=self.normalize_uvs,
+            maps_dir=maps_dir,
+        )
+
+    def strip_maps(self) -> PbrProperties:
+        """Return a copy with all texture maps removed (scalar values kept)."""
+        return PbrProperties(
+            id=self.id,
+            name=self.name,
+            source=self.source,
+            url=self.url,
+            license=self.license,
+            values=copy.deepcopy(self.values),
+            maps=PbrMaps(),
+            texture_repeat=self.texture_repeat,
+            texture_rotation=self.texture_rotation,
+            normalize_uvs=self.normalize_uvs,
+            maps_dir=None,
         )
 
     # -------------------------------------------------------------------
