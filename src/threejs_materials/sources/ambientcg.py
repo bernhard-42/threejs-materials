@@ -7,7 +7,7 @@ from pathlib import Path
 
 import requests
 
-from threejs_materials.sources.common import SourceResult
+from threejs_materials.sources.common import SourceResult, normalize_name
 
 log = logging.getLogger(__name__)
 
@@ -22,14 +22,9 @@ def material_url(name: str) -> str:
     return f"https://ambientcg.com/view?id={name}"
 
 
-def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
-    """Download an ambientCG material ZIP and extract .mtlx + textures.
-
-    *name* is the assetId (e.g. ``"Onyx015"``).
-    *resolution* is a normalized key: ``"1K"``, ``"2K"``, ``"4K"``, or ``"8K"``.
-
-    Prefers the PNG variant; falls back to JPG when the PNG package is 404.
-    """
+def _fetch_zip(name: str, resolution: str) -> bytes:
+    """Download an ambientCG material ZIP, preferring PNG and falling back to
+    JPG on a 404. Returns the raw ZIP bytes."""
     res_u = resolution.upper()
     if res_u not in _RESOLUTIONS:
         raise ValueError(
@@ -56,6 +51,18 @@ def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
             f"ambientCG: no package found for '{name}' at {res_u} "
             f"(tried {list(_VARIANTS)}; last: {last_err})"
         )
+    return content
+
+
+def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
+    """Download an ambientCG material ZIP and extract .mtlx + textures.
+
+    *name* is the assetId (e.g. ``"Onyx015"``).
+    *resolution* is a normalized key: ``"1K"``, ``"2K"``, ``"4K"``, or ``"8K"``.
+
+    Prefers the PNG variant; falls back to JPG when the PNG package is 404.
+    """
+    content = _fetch_zip(name, resolution)
 
     mtlx_path = None
     with zipfile.ZipFile(io.BytesIO(content)) as zf:
@@ -65,7 +72,7 @@ def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
                 mtlx_path.write_bytes(zf.read(entry))
             elif any(
                 entry.lower().endswith(ext)
-                for ext in (".png", ".jpg", ".jpeg", ".exr")
+                for ext in (".png", ".jpg", ".jpeg")
             ):
                 # Extract next to .mtlx (ambientCG references textures without subdirectory)
                 dst = out_dir / Path(entry).name
@@ -75,3 +82,13 @@ def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
         raise RuntimeError(f"No .mtlx found in ambientCG ZIP for {name}")
 
     return SourceResult(mtlx_path=mtlx_path, license=LICENSE, url=material_url(name))
+
+
+def download(name: str, resolution: str, dest: Path) -> None:
+    """Download an ambientCG material ZIP and extract it, hierarchy unchanged,
+    into ``<dest>/<normalized_name>/``."""
+    content = _fetch_zip(name, resolution)
+    out_dir = dest / normalize_name(name)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        zf.extractall(out_dir)

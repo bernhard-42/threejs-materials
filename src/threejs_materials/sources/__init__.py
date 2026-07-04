@@ -8,10 +8,24 @@ from pathlib import Path
 
 from platformdirs import user_cache_dir
 
+from pygltflib import GLTF2
+
 from threejs_materials.convert import _process_mtlx
+from threejs_materials.gltf import _from_gltf
 from threejs_materials.sources import ambientcg, gpuopen, polyhaven, physicallybased
-from threejs_materials.sources.common import SourceResult
 from threejs_materials.utils import _is_data_uri
+
+
+def _gltf_to_properties(gltf_path: Path) -> dict:
+    """Parse the first material of a glTF into the loader's combined
+    ``{prop: {"value"/"texture"}}`` shape. Textures come back as data URIs."""
+    data = _from_gltf(GLTF2.load(str(gltf_path)), index=0)
+    props: dict = {}
+    for k, v in data.get("values", {}).items():
+        props.setdefault(k, {})["value"] = v
+    for k, uri in data.get("textures", {}).items():
+        props.setdefault(k, {})["texture"] = uri
+    return props
 
 CACHE_DIR = Path(user_cache_dir("threejs-materials")) / "materialx"
 
@@ -124,6 +138,10 @@ class _SourceLoader:
                 properties, _, tex_dir = _process_mtlx(
                     result.mtlx_path, resolution=res_key
                 )
+            elif result.gltf_path:
+                print("parsing glTF ...", end=" ", flush=True)
+                properties = _gltf_to_properties(result.gltf_path)
+                tex_dir = None
             else:
                 properties = result.properties
                 tex_dir = None
@@ -236,7 +254,7 @@ def _load_physicallybased(name: str, resolution: str = "1K") -> dict:
 
 def list_sources() -> None:
     """Print available material sources with clickable URLs."""
-    width = max(len(l._source) for l in _ALL_LOADERS)
+    width = max(len(loader._source) for loader in _ALL_LOADERS)
     print("Material sources:")
     for loader in _ALL_LOADERS:
         label = f"load_{loader._source}"

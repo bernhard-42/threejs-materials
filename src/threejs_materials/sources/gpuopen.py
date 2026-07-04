@@ -7,7 +7,7 @@ from pathlib import Path
 
 import requests
 
-from threejs_materials.sources.common import SourceResult
+from threejs_materials.sources.common import SourceResult, normalize_name
 
 log = logging.getLogger(__name__)
 
@@ -29,11 +29,10 @@ def material_url(name: str, material_id: str = "") -> str:
     return "https://matlib.gpuopen.com/main/materials/all"
 
 
-def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
-    """Download a GPUOpen material ZIP and extract .mtlx + textures.
+def _fetch_zip(name: str, resolution: str) -> tuple[bytes, str, str, str]:
+    """Resolve a GPUOpen material by name + resolution and download its ZIP.
 
-    *name* is the material title (e.g. ``"Car Paint"``).
-    *resolution* is a normalized key: ``"1K"``, ``"2K"``, or ``"4K"``.
+    Returns ``(zip_bytes, title, license, url)``.
     """
     resolution = _RESOLUTION_MAP.get(resolution.upper(), resolution)
     # Search for the material by name
@@ -60,6 +59,7 @@ def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
     if material is None:
         material = results[0]
 
+    title = material.get("title", name)
     mat_license = material.get("license", "Unknown")
     mat_url = material_url(name, material.get("id", ""))
 
@@ -75,19 +75,29 @@ def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
     log.info("Downloading GPUOpen package: %s", download_url)
     resp = requests.get(download_url, timeout=120)
     resp.raise_for_status()
+    return resp.content, title, mat_license, mat_url
+
+
+def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
+    """Download a GPUOpen material ZIP and extract .mtlx + textures.
+
+    *name* is the material title (e.g. ``"Car Paint"``).
+    *resolution* is a normalized key: ``"1K"``, ``"2K"``, or ``"4K"``.
+    """
+    zip_bytes, _title, mat_license, mat_url = _fetch_zip(name, resolution)
 
     tex_dir = out_dir / "textures"
     tex_dir.mkdir(parents=True, exist_ok=True)
 
     mtlx_path = None
-    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
         for entry in zf.namelist():
             if entry.endswith(".mtlx"):
                 mtlx_path = out_dir / "material.mtlx"
                 mtlx_path.write_bytes(zf.read(entry))
             elif any(
                 entry.lower().endswith(ext)
-                for ext in (".png", ".jpg", ".jpeg", ".exr")
+                for ext in (".png", ".jpg", ".jpeg")
             ):
                 dst = tex_dir / Path(entry).name
                 dst.write_bytes(zf.read(entry))
@@ -96,6 +106,16 @@ def fetch(name: str, resolution: str, out_dir: Path) -> SourceResult:
         raise RuntimeError(f"No .mtlx found in GPUOpen ZIP for '{name}'")
 
     return SourceResult(mtlx_path=mtlx_path, license=mat_license, url=mat_url)
+
+
+def download(name: str, resolution: str, dest: Path) -> None:
+    """Download a GPUOpen material ZIP and extract it, hierarchy unchanged,
+    into ``<dest>/<normalized_title>/``."""
+    zip_bytes, title, _license, _url = _fetch_zip(name, resolution)
+    out_dir = dest / normalize_name(title)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        zf.extractall(out_dir)
 
 
 def _find_package(package_uuids: list[str], resolution: str) -> str:
