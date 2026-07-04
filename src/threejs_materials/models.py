@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import copy
-from dataclasses import dataclass, field, fields
-from pathlib import Path
+from dataclasses import dataclass, fields
 
 from threejs_materials.utils import _normalize_color, _normalize_srgb_color
 
@@ -187,9 +185,10 @@ class PbrMaps:
 # PbrOverrides — typed config object for override()
 # ---------------------------------------------------------------------------
 
-Color = str | tuple[float, ...] | list[float]
+Color = int | str | tuple[float, ...] | list[float]
 """Permissive color type accepted by override-style APIs.
 
+- ``int``: packed hex RGB (e.g. ``0xff0000``), converted to ``"#rrggbb"``.
 - ``str``: CSS hex string (``"#rrggbb"`` / ``"#rrggbbaa"`` for alpha) or
   named color (``"red"``). Always interpreted as sRGB.
 - ``tuple`` / ``list`` of 3 floats in [0, 1].
