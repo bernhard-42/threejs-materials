@@ -163,13 +163,13 @@ def _srgb_to_linear(c: float) -> float:
 def _linear_average_texture(
     ref: str | None = None,
     texture_dir: Path | None = None,
-    texture: bytes | None = None,
+    texture: str | bytes | None = None,
     as_linear_srgb: bool = True,
 ) -> tuple[float, float, float]:
     """Return the average color of a texture in linear RGB."""
     if texture is not None:
-        if isinstance(texture, str) and texture.startswith("data:"):
-            # split off header like "image/png;base64,"
+        if isinstance(texture, str):
+            # data URI — split off header like "image/png;base64,"
             _, b64data = texture.split(",", 1)
             img_bytes = base64.b64decode(b64data)
             img = PILImage.open(io.BytesIO(img_bytes)).convert("RGB")
@@ -180,11 +180,12 @@ def _linear_average_texture(
     else:
         raise TypeError("Either texture or ref, texture_dir need to be set")
 
-    avg = img.resize((1, 1), PILImage.Resampling.LANCZOS).getpixel((0, 0))
+    px = img.resize((1, 1), PILImage.Resampling.LANCZOS).getpixel((0, 0))
+    assert isinstance(px, tuple)
+    r, g, b = px[:3]
     if as_linear_srgb:
-        return [_srgb_to_linear(c / 255.0) for c in avg[:3]]  # type: ignore[misc]
-    else:
-        return [c / 255.0 for c in avg[:3]]  # type: ignore[misc]
+        return (_srgb_to_linear(r / 255.0), _srgb_to_linear(g / 255.0), _srgb_to_linear(b / 255.0))
+    return (r / 255.0, g / 255.0, b / 255.0)
 
 
 def texture_average_color(
