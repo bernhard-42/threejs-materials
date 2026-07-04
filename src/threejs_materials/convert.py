@@ -15,7 +15,7 @@ from sys import platform
 import numpy as np
 from PIL import Image
 
-from threejs_materials.utils import ensure_materialx, ensure_openexr, _linear_to_srgb
+from threejs_materials.utils import OpenEXR, Imath, ensure_materialx, _linear_to_srgb
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +67,8 @@ def _exr_to_png(exr_path: Path, png_path: Path) -> None:
     roughness, displacement) or ``RGBA`` (normals). Other layouts fall back
     to per-channel R/G/B reads.
     """
-    OpenEXR, _ = ensure_openexr()
+    if OpenEXR is None:
+        raise ImportError("openexr is required to read EXR files: pip install openexr")
 
     with OpenEXR.File(str(exr_path)) as f:
         channels = f.parts[0].channels
@@ -111,7 +112,6 @@ def _transcode_exr_inputs(doc, base_dir: Path) -> None:
     input when none was already declared, so downstream tools don't gamma-
     decode the linear data as if the PNG were sRGB.
     """
-    mx = ensure_materialx()
 
     for node in _iter_image_nodes(doc):
         file_input = node.getInput("file")
@@ -120,6 +120,7 @@ def _transcode_exr_inputs(doc, base_dir: Path) -> None:
         value = file_input.getValueString()
         if not value or not value.lower().endswith(".exr"):
             continue
+        mx = ensure_materialx()
         exr_path = (base_dir / value).resolve()
         if not exr_path.exists():
             log.debug("EXR not on disk, skipping transcode: %s", exr_path)
@@ -238,10 +239,10 @@ def find_upstream_image(inp) -> dict | None:
 
 
 def _extract_image_info(node) -> dict | None:
-    mx = ensure_materialx()
     if node is None:
         return None
 
+    mx = ensure_materialx()
     category = node.getCategory()
     if category in ("image", "tiledimage"):
         result = {"node": node.getName()}
@@ -871,7 +872,8 @@ def to_threejs_physical(mat: dict, base_dir: Path) -> dict:
 
 def _convert_exr_to_png(exr_path: Path) -> Path:
     """Convert an EXR image to 8-bit PNG. Returns path to the new PNG file."""
-    OpenEXR, Imath = ensure_openexr()
+    if OpenEXR is None or Imath is None:
+        raise ImportError("openexr is required to read EXR files: pip install openexr")
 
     exr_file = OpenEXR.InputFile(str(exr_path))
     header = exr_file.header()

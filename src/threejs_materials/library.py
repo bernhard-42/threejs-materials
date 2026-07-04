@@ -25,7 +25,6 @@ from threejs_materials.gltf import (
 )
 from threejs_materials.models import PbrMaps, PbrValues
 from threejs_materials.utils import (
-    ensure_materialx,
     _abbreviate_textures,
     _is_data_uri,
     _resolve_to_data_uri,

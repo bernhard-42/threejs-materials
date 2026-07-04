@@ -3,70 +3,56 @@
 import base64
 import io
 import mimetypes
+import sys
 from pathlib import Path
+from types import ModuleType
 
 from PIL import Image as PILImage
 from PIL import ImageColor
 
 
 # ---------------------------------------------------------------------------
-# MaterialX lazy loading
+# Optional dependencies. MaterialX (baking/conversion) and OpenEXR (Polyhaven
+# full-precision inputs) are both optional — the bundled materials and all
+# load/serialize paths work without them. Conversion from a source requires
+# MaterialX:  pip install threejs-materials[materialx]
 # ---------------------------------------------------------------------------
 
-_COMPILE_NOTE = """\
-Note: For the latest Python, the installer tries to compile these packages. \
-This might not be possible under Windows if no compiler is installed."""
+OpenEXR: ModuleType | None = None
+Imath: ModuleType | None = None
+try:
+    import OpenEXR as _OpenEXR
+    import Imath as _Imath
 
-_MATERIALX_INSTALL_MSG = f"""\
-materialx is not installed. Use
-- "pip install threejs-materials[materialx]"
-or install it directly
-- "pip install materialx"
-{_COMPILE_NOTE}"""
-
-_OPENEXR_INSTALL_MSG = f"""\
-openexr is not installed. Use
-- "pip install threejs-materials[materialx]"
-or install it directly
-- "pip install openexr"
-{_COMPILE_NOTE}"""
+    OpenEXR = _OpenEXR
+    Imath = _Imath
+except ImportError:
+    pass
 
 
-def ensure_materialx():
-    """Import and return the MaterialX module, raising ImportError with install instructions.
+_MATERIALX_INSTALL_MSG = (
+    "MaterialX is required to convert materials from a source, but it is not "
+    "installed. Install it with:  pip install threejs-materials[materialx]"
+)
 
-    Also imports the render submodules (PyMaterialXRender, PyMaterialXRenderGlsl,
-    PyMaterialXRenderMsl) so they are accessible as ``mx.PyMaterialXRender``, etc.
+
+def ensure_materialx() -> ModuleType:
+    """Import and return the MaterialX module (render submodules registered).
+
+    MaterialX is an optional dependency. Called at the top of every function
+    that bakes/extracts. Raises ImportError with an install hint when absent.
     """
     try:
-        import MaterialX
-        from MaterialX import PyMaterialXRender  # noqa: F401
-        from MaterialX import PyMaterialXRenderGlsl  # noqa: F401
+        import MaterialX as mx
+        from MaterialX import PyMaterialXRender, PyMaterialXRenderGlsl  # noqa: F401
     except ImportError as e:
         raise ImportError(_MATERIALX_INSTALL_MSG) from e
-
-    from sys import platform
-
-    if platform == "darwin":
+    if sys.platform == "darwin":
         try:
             from MaterialX import PyMaterialXRenderMsl  # noqa: F401
         except ImportError:
             pass
-
-    return MaterialX
-
-
-def ensure_openexr():
-    """Import and return (OpenEXR, Imath), raising ImportError with install instructions.
-
-    Imath is bundled with the openexr package — no separate install needed.
-    """
-    try:
-        import OpenEXR
-        import Imath
-    except ImportError as e:
-        raise ImportError(_OPENEXR_INSTALL_MSG) from e
-    return OpenEXR, Imath
+    return mx
 
 
 # ---------------------------------------------------------------------------
