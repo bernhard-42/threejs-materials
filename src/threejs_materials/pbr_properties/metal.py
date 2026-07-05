@@ -402,6 +402,70 @@ def silver_matte(roughness=None, scale=(1, 1), rotation=0.0):
         m = m.scale(scale[0], scale[1], rotation=rotation)
     return m
 
+def nickel(roughness=None):
+    m = PbrProperties.from_dict({   'id': 'nickel',
+    'name': 'nickel',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.8526800368272145,
+                               0.8215498880219183,
+                               0.7754196632585052],
+                  'metalness': 1.0,
+                  'roughness': 0.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.815, 0.834, 0.871]},
+    'textures': {}})
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    return m
+
+def nickel_brushed(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'nickel_brushed',
+    'name': 'nickel_brushed',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.8526800368272145,
+                               0.8215498880219183,
+                               0.7754196632585052],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.815, 0.834, 0.871]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_brush'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+def nickel_matte(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'nickel_matte',
+    'name': 'nickel_matte',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.8526800368272145,
+                               0.8215498880219183,
+                               0.7754196632585052],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.815, 0.834, 0.871]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_matte'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
 def stainless(roughness=None):
     m = PbrProperties.from_dict({   'id': 'stainless',
     'name': 'stainless',
@@ -750,6 +814,9 @@ __all__ = ['aluminum',
  'gold',
  'gold_brushed',
  'gold_matte',
+ 'nickel',
+ 'nickel_brushed',
+ 'nickel_matte',
  'silver',
  'silver_brushed',
  'silver_matte',

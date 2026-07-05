@@ -63,7 +63,7 @@ A curated set of ready-to-use PBR materials ships with the library. They need **
 | Module    | Materials                                                                                                  |
 | --------- | ---------------------------------------------------------------------------------------------------------- |
 | `wood`    | ash, beech, birch, maple, mdf, oak, osb, spruce, walnut                                                    |
-| `metal`   | aluminum, brass, bronze, copper, gold, silver, stainless, steel, titanium, zinc (each + `_brushed` / `_matte`), aluminum_anodized |
+| `metal`   | aluminum, brass, bronze, copper, gold, silver, nickel, stainless, steel, titanium, zinc (each + `_brushed` / `_matte`), aluminum_anodized |
 | `coats`   | chrome, colored_coat_matte/gloss (painted, metalness 0), metallic_coat_matte/gloss (plated, metalness 1)   |
 | `plastic` | acrylic, plastic_clean, plastic_rough, carbon_fiber                                                        |
 | `glass`   | glass                                                                                                      |
@@ -95,6 +95,20 @@ wood.oak(color="#3a1f10", rotation=90)     # stained + rotated grain
 ```
 
 Each module's `__all__` lists its materials. Materials hold texture-file references, so importing a module is cheap — no texture bytes are read until you export a specific material. To convert your **own** materials from a source instead of using the bundle, install the [`[materialx]` extra](#materialx-support-optional).
+
+### Composing beyond the exposed parameters
+
+The factory signatures deliberately expose only the common knobs. For full control, call [`override()`](#customization) on the returned material — it takes `metalness`, `ior`, `transmission`, and ~25 other properties, and **keeps the material's texture maps**. That lets you layer an arbitrary colour / metalness / roughness response over a bundled material's *relief* (its normal + roughness maps) — no new material or asset required:
+
+```python
+# brushed relief, but re-coloured as black PVD (still metallic)
+metal.gold_brushed().override(color="#101010")
+
+# matte-metal relief, turned into painted (dielectric) pink
+metal.aluminum_matte().override(color="pink", metalness=0, roughness=0.3)
+```
+
+Because the metal finishes carry no *colour* map (only normal + roughness), an override sets the base value directly — so once re-coloured, `aluminum_matte(...)` and `gold_matte(...)` compose to the same result. To graft one material's maps onto a different scalar base instead, use `with_maps()`.
 
 ## Input Formats
 

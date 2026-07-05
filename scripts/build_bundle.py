@@ -54,6 +54,7 @@ METAL_FINISH_BASES: dict[str, tuple[str, str]] = {
     "copper": ("physicallybased", "Copper"),
     "gold": ("physicallybased", "Gold"),
     "silver": ("physicallybased", "Silver"),
+    "nickel": ("physicallybased", "Nickel"),
     "stainless": ("physicallybased", "Stainless Steel"),
     "steel": ("physicallybased", "Iron"),       # bare iron ≈ raw/mild steel
     "titanium": ("physicallybased", "Titanium"),
