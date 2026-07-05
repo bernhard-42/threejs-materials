@@ -130,6 +130,14 @@ def test_rotation_only_on_textured():
     assert wood.oak().id == "oak"
 
 
+def test_physicallybased_metal_color_is_srgb_roundtrip():
+    """PhysicallyBased metals store `color` as sRGB, so glTF baseColorFactor
+    (linear) recovers the DB's linear F0. Guards against the double-linearization
+    bug that rendered these metals too dark (zinc F0 = [0.808, 0.844, 0.865])."""
+    bcf = metal.zinc().to_gltf().materials[0].pbrMetallicRoughness.baseColorFactor
+    assert list(bcf[:3]) == pytest.approx([0.808, 0.844, 0.865], abs=2e-3)
+
+
 def test_wood_is_colorable_textured():
     g = wood.oak().to_gltf()
     assert len(g.images) == 3  # color + normal + roughness (metalness dropped)

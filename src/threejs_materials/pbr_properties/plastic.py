@@ -21,7 +21,9 @@ def acrylic(color=None, roughness=None, thickness=None):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [1, 1, 1],
+    'values': {   'color': [   0.9999999999999999,
+                               0.9999999999999999,
+                               0.9999999999999999],
                   'metalness': 0.0,
                   'roughness': 0.0,
                   'ior': 1.4905,
@@ -82,4 +84,30 @@ def plastic_rough(color=None, roughness=None, scale=(1, 1), rotation=0.0):
         m = m.scale(scale[0], scale[1], rotation=rotation)
     return m
 
-__all__ = ['acrylic', 'plastic_clean', 'plastic_rough']
+def carbon_fiber(color=None, roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'carbon_fiber',
+    'name': 'carbon_fiber',
+    'source': 'ambientcg',
+    'url': 'https://ambientcg.com/view?id=Fabric 004',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.9999999999999999,
+                               0.9999999999999999,
+                               0.9999999999999999],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'ior': 1.5},
+    'textures': {   'color': 'color.png',
+                    'normal': 'normal.png',
+                    'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / 'carbon_fiber'),
+    })
+    if color is not None:
+        m = m.override(color=color)
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+__all__ = ['acrylic', 'carbon_fiber', 'plastic_clean', 'plastic_rough']

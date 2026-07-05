@@ -10,6 +10,7 @@ from pathlib import Path
 import requests
 
 from threejs_materials.sources.common import SourceResult
+from threejs_materials.utils import _linear_to_srgb
 
 log = logging.getLogger(__name__)
 
@@ -91,9 +92,12 @@ def _to_threejs_properties(mat: dict) -> dict:
     subsurface_radius = mat.get("subsurfaceRadius")
 
     # color — always set (glTF needs baseColorFactor; transmissive materials
-    # use attenuationColor for tint but still need a base color)
+    # use attenuationColor for tint but still need a base color).
+    # PhysicallyBased colours are srgb-linear (F0); values.color is sRGB-stored
+    # (gltf.py / the viewer re-linearize it), so convert here. specularColor and
+    # attenuationColor are LINEAR-stored per convention, so they are left as-is.
     if not subsurface_radius:
-        val("color", color)
+        val("color", [_linear_to_srgb(c) for c in color])
 
     # metalness — always set (glTF defaults to 1.0 which is wrong for dielectrics)
     val("metalness", float(metalness))

@@ -21,7 +21,9 @@ def chrome(roughness=None):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.654, 0.685, 0.701],
+    'values': {   'color': [   0.8289136787893979,
+                               0.8461357050249962,
+                               0.854846859663698],
                   'metalness': 1.0,
                   'roughness': 0.0,
                   'specularIntensity': 1.0,
@@ -59,4 +61,36 @@ def colored_coat_gloss(color=None, roughness=None):
         m = m.override(roughness=roughness)
     return m
 
-__all__ = ['chrome', 'colored_coat_gloss', 'colored_coat_matte']
+def metallic_coat_matte(color=None, roughness=None):
+    m = PbrProperties.from_dict({   'id': 'metallic_coat_matte',
+    'name': 'metallic_coat_matte',
+    'source': 'custom',
+    'url': '',
+    'license': '',
+    'values': {'color': [1.0, 1.0, 1.0], 'metalness': 1.0, 'roughness': 0.5},
+    'textures': {}})
+    if color is not None:
+        m = m.override(color=color)
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    return m
+
+def metallic_coat_gloss(color=None, roughness=None):
+    m = PbrProperties.from_dict({   'id': 'metallic_coat_gloss',
+    'name': 'metallic_coat_gloss',
+    'source': 'custom',
+    'url': '',
+    'license': '',
+    'values': {'color': [1.0, 1.0, 1.0], 'metalness': 1.0, 'roughness': 0.12},
+    'textures': {}})
+    if color is not None:
+        m = m.override(color=color)
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    return m
+
+__all__ = ['chrome',
+ 'colored_coat_gloss',
+ 'colored_coat_matte',
+ 'metallic_coat_gloss',
+ 'metallic_coat_matte']

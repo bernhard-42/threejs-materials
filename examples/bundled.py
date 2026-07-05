@@ -1,8 +1,5 @@
 from build123d import *
 from ocp_vscode import *
-from pathlib import Path
-
-from threejs_materials import PbrProperties
 
 from threejs_materials import wood
 from threejs_materials import paper
@@ -17,7 +14,6 @@ from ocp_vscode.utils import create_shader_ball
 
 
 sb = create_shader_ball("sb")
-
 
 # %%
 m = wood.ash()
@@ -157,6 +153,43 @@ sb.color = m.interpolate_color()
 show(sb, materials=[m])
 # %%
 m = metal.stainless_matte()
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+# %%
+m = metal.steel()
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+# %%
+m = metal.steel_brushed()
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+# %%
+m = metal.steel_matte()
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+
+# %%
+m = metal.titanium()
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+# %%
+m = metal.titanium_brushed()
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+# %%
+m = metal.titanium_matte()
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+# %%
+m = metal.zinc()
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+# %%
+m = metal.zinc_brushed()
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+# %%
+m = metal.zinc_matte()
 sb.color = m.interpolate_color()
 show(sb, materials=[m])
 

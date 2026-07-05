@@ -21,7 +21,9 @@ def aluminum(roughness=None):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.916, 0.923, 0.924],
+    'values': {   'color': [   0.962127915014933,
+                               0.9653593968226258,
+                               0.965819868630574],
                   'metalness': 1.0,
                   'roughness': 0.0,
                   'specularIntensity': 1.0,
@@ -38,7 +40,9 @@ def aluminum_brushed(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.916, 0.923, 0.924],
+    'values': {   'color': [   0.962127915014933,
+                               0.9653593968226258,
+                               0.965819868630574],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -59,7 +63,9 @@ def aluminum_matte(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.916, 0.923, 0.924],
+    'values': {   'color': [   0.962127915014933,
+                               0.9653593968226258,
+                               0.965819868630574],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -79,7 +85,9 @@ def brass(roughness=None):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.91, 0.778, 0.423],
+    'values': {   'color': [   0.9593465889662697,
+                               0.8952268365504931,
+                               0.6821586160863968],
                   'metalness': 1.0,
                   'roughness': 0.0,
                   'specularIntensity': 1.0,
@@ -96,7 +104,9 @@ def brass_brushed(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.91, 0.778, 0.423],
+    'values': {   'color': [   0.9593465889662697,
+                               0.8952268365504931,
+                               0.6821586160863968],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -117,7 +127,9 @@ def brass_matte(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.91, 0.778, 0.423],
+    'values': {   'color': [   0.9593465889662697,
+                               0.8952268365504931,
+                               0.6821586160863968],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -204,7 +216,9 @@ def copper(roughness=None):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.932, 0.623, 0.522],
+    'values': {   'color': [   0.9694932227237055,
+                               0.8112085757532148,
+                               0.7496651069259223],
                   'metalness': 1.0,
                   'roughness': 0.0,
                   'specularIntensity': 1.0,
@@ -221,7 +235,9 @@ def copper_brushed(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.932, 0.623, 0.522],
+    'values': {   'color': [   0.9694932227237055,
+                               0.8112085757532148,
+                               0.7496651069259223],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -242,7 +258,9 @@ def copper_matte(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.932, 0.623, 0.522],
+    'values': {   'color': [   0.9694932227237055,
+                               0.8112085757532148,
+                               0.7496651069259223],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -262,7 +280,9 @@ def gold(roughness=None):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [1.059, 0.773, 0.307],
+    'values': {   'color': [   0.9999999999999999,
+                               0.8926775272379572,
+                               0.5900005962166698],
                   'metalness': 1.0,
                   'roughness': 0.0,
                   'specularIntensity': 1.0,
@@ -279,7 +299,9 @@ def gold_brushed(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [1.059, 0.773, 0.307],
+    'values': {   'color': [   0.9999999999999999,
+                               0.8926775272379572,
+                               0.5900005962166698],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -300,7 +322,9 @@ def gold_matte(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [1.059, 0.773, 0.307],
+    'values': {   'color': [   0.9999999999999999,
+                               0.8926775272379572,
+                               0.5900005962166698],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -320,7 +344,9 @@ def silver(roughness=None):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.991, 0.985, 0.974],
+    'values': {   'color': [   0.9960333152256678,
+                               0.9933771717300072,
+                               0.9884829524812248],
                   'metalness': 1.0,
                   'roughness': 0.0,
                   'specularIntensity': 1.0,
@@ -337,7 +363,9 @@ def silver_brushed(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.991, 0.985, 0.974],
+    'values': {   'color': [   0.9960333152256678,
+                               0.9933771717300072,
+                               0.9884829524812248],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -358,7 +386,9 @@ def silver_matte(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.991, 0.985, 0.974],
+    'values': {   'color': [   0.9960333152256678,
+                               0.9933771717300072,
+                               0.9884829524812248],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -378,7 +408,9 @@ def stainless(roughness=None):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.669, 0.639, 0.598],
+    'values': {   'color': [   0.8373050318261851,
+                               0.8204092888324144,
+                               0.7965522215794997],
                   'metalness': 1.0,
                   'roughness': 0.0,
                   'specularIntensity': 1.0,
@@ -395,7 +427,9 @@ def stainless_brushed(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.669, 0.639, 0.598],
+    'values': {   'color': [   0.8373050318261851,
+                               0.8204092888324144,
+                               0.7965522215794997],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
@@ -416,11 +450,263 @@ def stainless_matte(roughness=None, scale=(1, 1), rotation=0.0):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.669, 0.639, 0.598],
+    'values': {   'color': [   0.8373050318261851,
+                               0.8204092888324144,
+                               0.7965522215794997],
                   'metalness': 1.0,
                   'roughness': 1.0,
                   'specularIntensity': 1.0,
                   'specularColor': [0.789, 0.823, 0.87]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_matte'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+def steel(roughness=None):
+    m = PbrProperties.from_dict({   'id': 'steel',
+    'name': 'steel',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.7547806693306308,
+                               0.7438551299770171,
+                               0.7313912786073086],
+                  'metalness': 1.0,
+                  'roughness': 0.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.765, 0.767, 0.802]},
+    'textures': {}})
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    return m
+
+def steel_brushed(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'steel_brushed',
+    'name': 'steel_brushed',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.7547806693306308,
+                               0.7438551299770171,
+                               0.7313912786073086],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.765, 0.767, 0.802]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_brush'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+def steel_matte(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'steel_matte',
+    'name': 'steel_matte',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.7547806693306308,
+                               0.7438551299770171,
+                               0.7313912786073086],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.765, 0.767, 0.802]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_matte'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+def titanium(roughness=None):
+    m = PbrProperties.from_dict({   'id': 'titanium',
+    'name': 'titanium',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.6950701317088461,
+                               0.6651850846308363,
+                               0.6350498414533903],
+                  'metalness': 1.0,
+                  'roughness': 0.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.865, 0.906, 0.946]},
+    'textures': {}})
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    return m
+
+def titanium_brushed(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'titanium_brushed',
+    'name': 'titanium_brushed',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.6950701317088461,
+                               0.6651850846308363,
+                               0.6350498414533903],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.865, 0.906, 0.946]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_brush'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+def titanium_matte(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'titanium_matte',
+    'name': 'titanium_matte',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.6950701317088461,
+                               0.6651850846308363,
+                               0.6350498414533903],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.865, 0.906, 0.946]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_matte'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+def zinc(roughness=None):
+    m = PbrProperties.from_dict({   'id': 'zinc',
+    'name': 'zinc',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.9103256807292641,
+                               0.9280187744328082,
+                               0.9381370204587529],
+                  'metalness': 1.0,
+                  'roughness': 0.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.762, 0.833, 0.896]},
+    'textures': {}})
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    return m
+
+def zinc_brushed(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'zinc_brushed',
+    'name': 'zinc_brushed',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.9103256807292641,
+                               0.9280187744328082,
+                               0.9381370204587529],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.762, 0.833, 0.896]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_brush'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+def zinc_matte(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'zinc_matte',
+    'name': 'zinc_matte',
+    'source': 'physicallybased',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [   0.9103256807292641,
+                               0.9280187744328082,
+                               0.9381370204587529],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.762, 0.833, 0.896]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_matte'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+def tin(roughness=None):
+    m = PbrProperties.from_dict({   'id': 'tin',
+    'name': 'tin',
+    'source': 'physicallybased-approx',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [0.78, 0.8, 0.79],
+                  'metalness': 1.0,
+                  'roughness': 0.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.6038, 0.6383, 0.6739]},
+    'textures': {}})
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    return m
+
+def tin_brushed(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'tin_brushed',
+    'name': 'tin_brushed',
+    'source': 'physicallybased-approx',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [0.78, 0.8, 0.79],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.6038, 0.6383, 0.6739]},
+    'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / '_brush'),
+    })
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
+def tin_matte(roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'tin_matte',
+    'name': 'tin_matte',
+    'source': 'physicallybased-approx',
+    'url': 'https://physicallybased.info/',
+    'license': 'CC0 1.0',
+    'values': {   'color': [0.78, 0.8, 0.79],
+                  'metalness': 1.0,
+                  'roughness': 1.0,
+                  'specularIntensity': 1.0,
+                  'specularColor': [0.6038, 0.6383, 0.6739]},
     'textures': {'normal': 'normal.png', 'roughness': 'roughness.png'}},
         "maps_dir": str(_ASSETS / '_matte'),
     })
@@ -436,7 +722,7 @@ def aluminum_anodized(color=None, roughness=None):
     'source': 'physicallybased',
     'url': 'https://physicallybased.info/',
     'license': 'CC0 1.0',
-    'values': {   'color': [0.6, 0.0, 0.0],
+    'values': {   'color': [0.7977377330312598, 0.0, 0.0],
                   'metalness': 1.0,
                   'roughness': 0.3,
                   'specularIntensity': 1.0,
@@ -469,4 +755,16 @@ __all__ = ['aluminum',
  'silver_matte',
  'stainless',
  'stainless_brushed',
- 'stainless_matte']
+ 'stainless_matte',
+ 'steel',
+ 'steel_brushed',
+ 'steel_matte',
+ 'tin',
+ 'tin_brushed',
+ 'tin_matte',
+ 'titanium',
+ 'titanium_brushed',
+ 'titanium_matte',
+ 'zinc',
+ 'zinc_brushed',
+ 'zinc_matte']

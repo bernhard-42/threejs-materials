@@ -55,11 +55,31 @@ METAL_FINISH_BASES: dict[str, tuple[str, str]] = {
     "gold": ("physicallybased", "Gold"),
     "silver": ("physicallybased", "Silver"),
     "stainless": ("physicallybased", "Stainless Steel"),
+    "steel": ("physicallybased", "Iron"),       # bare iron ≈ raw/mild steel
+    "titanium": ("physicallybased", "Titanium"),
+    "zinc": ("physicallybased", "Zinc"),
 }
 # Standalone scalar metals (no finish triple)
 METAL_STANDALONE: dict[str, tuple[str, str]] = {
     "aluminum_anodized": ("physicallybased", "Aluminum (Anodized Red)"),
     "chrome": ("physicallybased", "Chromium"),
+}
+# Bare metals with no source-DB entry — hand-authored. Per the to_dict
+# convention: color is sRGB; specularColor is LINEAR (here converted from an
+# sRGB [0.80,0.82,0.84] starting point).
+HAND_AUTHORED_METALS: dict[str, dict] = {
+    "tin": {
+        "source": "physicallybased-approx",
+        "url": "https://physicallybased.info/",
+        "license": "CC0 1.0",
+        "values": {
+            "color": [0.78, 0.80, 0.79],
+            "metalness": 1.0,
+            "roughness": 0.0,
+            "specularIntensity": 1.0,
+            "specularColor": [0.6038, 0.6383, 0.6739],
+        },
+    },
 }
 # Shared metal surface map sets: (asset dir, source, name)
 BRUSH = ("_brush", "ambientcg", "Metal 009")
@@ -74,6 +94,7 @@ TEXTURED: dict[str, tuple[str, str]] = {
     "fabric_weave": ("ambientcg", "Fabric 060"),
     "fabric_knit": ("ambientcg", "Fabric 019"),
     "felt": ("ambientcg", "Fabric 034"),
+    "carbon_fiber": ("ambientcg", "Fabric 004"),
 }
 # Scalar (texture-less) materials: name -> (source, source_name)
 SCALARS: dict[str, tuple[str, str]] = {
@@ -89,6 +110,7 @@ TEX_CAT = {
     "fabric_weave": "textile",
     "fabric_knit": "textile",
     "felt": "textile",
+    "carbon_fiber": "plastic",   # composite → plastic category (weave texture)
 }
 
 SURFACE_MAPS = ("normal", "roughness")
@@ -172,16 +194,18 @@ def build() -> tuple[list[Entry], dict[str, str]]:
     clean.values.roughness = PLASTIC_CLEAN_ROUGHNESS
     add("plastic", "plastic_clean", clean, color=True)
 
-    # own-dir textured (colorable dielectrics; color+normal+roughness)
+    # own-dir textured (colorable dielectrics; color+normal+roughness).
+    # bake() first so the cache is populated before _copy_maps reads it.
     for name, (src, sname) in TEXTURED.items():
+        mat = bake(src, sname)
         tex = _copy_maps(_cache_dir(src, sname), ASSETS / name, FULL_MAPS)
-        add(TEX_CAT[name], name, bake(src, sname), tex, name, color=True)
+        add(TEX_CAT[name], name, mat, tex, name, color=True)
 
     # metals — NO color (intrinsic reflectance). shiny = base name;
     # brushed/matte share the two surface-map sets.
+    brush, matte = bake(*BRUSH[1:]), bake(*MATTE[1:])
     for adir, src, sname in (BRUSH, MATTE):
         _copy_maps(_cache_dir(src, sname), ASSETS / adir, SURFACE_MAPS)
-    brush, matte = bake(*BRUSH[1:]), bake(*MATTE[1:])
     stex = {"normal": "normal.png", "roughness": "roughness.png"}
     for base_name, (src, sname) in METAL_FINISH_BASES.items():
         add("metal", base_name, bake(src, sname))
@@ -190,23 +214,38 @@ def build() -> tuple[list[Entry], dict[str, str]]:
             m = base.with_maps(other, only=SURFACE_MAPS)
             m.values.roughness = 1.0  # let the surface map drive roughness
             add("metal", f"{base_name}_{finish}", m, dict(stex), adir)
+    # hand-authored metals (no source DB) — same shiny/brushed/matte triple
+    for base_name, spec in HAND_AUTHORED_METALS.items():
+        base = PbrProperties.from_dict({"id": base_name, "name": base_name, **spec})
+        add("metal", base_name, base)
+        for finish, other, adir in (("brushed", brush, "_brush"), ("matte", matte, "_matte")):
+            m = base.with_maps(other, only=SURFACE_MAPS)
+            m.values.roughness = 1.0
+            add("metal", f"{base_name}_{finish}", m, dict(stex), adir)
     # anodized aluminum is dyed → colorable (metal); chrome is a mirror finish (coats)
     add("metal", "aluminum_anodized",
         bake(*METAL_STANDALONE["aluminum_anodized"]), color=True)
     add("coats", "chrome", bake(*METAL_STANDALONE["chrome"]))
 
-    # colored coats — hand-authored dielectric scalars, colorable (default white)
+    # colored coats — painted, hand-authored DIELECTRIC scalars (metalness 0)
     for name, rough in (("colored_coat_matte", COAT_MATTE_ROUGHNESS),
                         ("colored_coat_gloss", COAT_GLOSS_ROUGHNESS)):
         m = PbrProperties.create(id=name, color="#ffffff", metalness=0.0, roughness=rough)
         add("coats", name, m, color=True)
 
+    # metallic coats — plated/converted METALLIC scalars (metalness 1): black
+    # oxide, PVD colours, nickel/tin/zinc. Scalar mirror of colored_coat_*.
+    for name, rough in (("metallic_coat_matte", COAT_MATTE_ROUGHNESS),
+                        ("metallic_coat_gloss", COAT_GLOSS_ROUGHNESS)):
+        m = PbrProperties.create(id=name, color="#ffffff", metalness=1.0, roughness=rough)
+        add("coats", name, m, color=True)
+
     # leather — one desaturated+normalized shared texture, default brown baked
     lsrc, lname = "ambientcg", "Leather 028"
     ldir = ASSETS / "leather"
+    lbase = bake(lsrc, lname)  # bake first so the cache exists for the copies below
     _copy_maps(_cache_dir(lsrc, lname), ldir, SURFACE_MAPS)
     _desaturate_normalize(_cache_dir(lsrc, lname) / "color.png", ldir / "color.png", LEATHER_MAP_MEAN)
-    lbase = bake(lsrc, lname)
     lbase.values.color = list(_normalize_srgb_color(LEATHER_DEFAULT_COLOR)[0])
     ltex = {"color": "color.png", "normal": "normal.png", "roughness": "roughness.png"}
     add("textile", "leather", lbase, ltex, "leather", color=True)
