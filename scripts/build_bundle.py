@@ -41,8 +41,8 @@ WOOD_SRC = PKG.parent.parent / "wood_src"
 LEATHER_DEFAULT_COLOR = "#7a5230"  # baked default (medium brown); leather(color=...) overrides
 LEATHER_MAP_MEAN = 0.85            # brightness target for the desaturated map
 PLASTIC_CLEAN_ROUGHNESS = 0.15     # roughness of texture-less "clean" plastic
-COAT_MATTE_ROUGHNESS = 0.5         # colored_coat_matte (satin)
-COAT_GLOSS_ROUGHNESS = 0.12        # colored_coat_gloss
+COAT_MATTE_ROUGHNESS = 0.5         # roughness of the *_matte coats (matte)
+COAT_GLOSS_ROUGHNESS = 0.12        # roughness of the *_gloss coats
 TRANSMISSIVE_THICKNESS = 1.0       # baked default thickness (object units) for glass/acrylic
                                    #   drives volumetric refraction; overridable per call
 
@@ -228,14 +228,14 @@ def build() -> tuple[list[Entry], dict[str, str]]:
         bake(*METAL_STANDALONE["aluminum_anodized"]), color=True)
     add("coats", "chrome", bake(*METAL_STANDALONE["chrome"]))
 
-    # colored coats — painted, hand-authored DIELECTRIC scalars (metalness 0)
-    for name, rough in (("colored_coat_matte", COAT_MATTE_ROUGHNESS),
-                        ("colored_coat_gloss", COAT_GLOSS_ROUGHNESS)):
+    # coats — painted, hand-authored DIELECTRIC scalars (metalness 0)
+    for name, rough in (("coat_matte", COAT_MATTE_ROUGHNESS),
+                        ("coat_gloss", COAT_GLOSS_ROUGHNESS)):
         m = PbrProperties.create(id=name, color="#ffffff", metalness=0.0, roughness=rough)
         add("coats", name, m, color=True)
 
     # metallic coats — plated/converted METALLIC scalars (metalness 1): black
-    # oxide, PVD colours, nickel/tin/zinc. Scalar mirror of colored_coat_*.
+    # oxide, PVD colours, nickel/tin/zinc. Scalar mirror of coat_*.
     for name, rough in (("metallic_coat_matte", COAT_MATTE_ROUGHNESS),
                         ("metallic_coat_gloss", COAT_GLOSS_ROUGHNESS)):
         m = PbrProperties.create(id=name, color="#ffffff", metalness=1.0, roughness=rough)

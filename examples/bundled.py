@@ -199,11 +199,11 @@ m = coats.chrome()
 sb.color = m.interpolate_color()
 show(sb, materials=[m])
 # %%
-m = coats.colored_coat_matte(color="orange")
+m = coats.coat_matte(color="orange")
 sb.color = m.interpolate_color()
 show(sb, materials=[m])
 # %%
-m = coats.colored_coat_gloss(color="orange")
+m = coats.coat_gloss(color="orange")
 sb.color = m.interpolate_color()
 show(sb, materials=[m])
 

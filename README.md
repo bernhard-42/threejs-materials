@@ -64,7 +64,7 @@ A curated set of ready-to-use PBR materials ships with the library. They need **
 | --------- | ---------------------------------------------------------------------------------------------------------- |
 | `wood`    | ash, beech, birch, maple, mdf, oak, osb, spruce, walnut                                                    |
 | `metal`   | aluminum, brass, bronze, copper, gold, silver, nickel, stainless, steel, titanium, zinc (each + `_brushed` / `_matte`), aluminum_anodized |
-| `coats`   | chrome, colored_coat_matte/gloss (painted, metalness 0), metallic_coat_matte/gloss (plated, metalness 1)   |
+| `coats`   | chrome, coat_matte/gloss (painted, metalness 0), metallic_coat_matte/gloss (plated, metalness 1)           |
 | `plastic` | acrylic, plastic_clean, plastic_rough, carbon_fiber                                                        |
 | `glass`   | glass                                                                                                      |
 | `paper`   | corrugated_cardboard, foamboard, paper                                                                     |

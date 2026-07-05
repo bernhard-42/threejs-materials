@@ -102,7 +102,7 @@ def test_colorable_and_textured_params():
     assert _params(metal.aluminum_anodized) == {"color", "roughness"}
     assert _params(textile.fabric_weave) == {"color", "roughness", "scale", "rotation"}
     assert _params(wood.oak) == {"color", "roughness", "scale", "rotation"}
-    assert _params(coats.colored_coat_matte) == {"color", "roughness"}
+    assert _params(coats.coat_matte) == {"color", "roughness"}
 
 
 def test_transmissive_materials_expose_thickness():

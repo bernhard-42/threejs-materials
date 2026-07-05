@@ -33,9 +33,9 @@ def chrome(roughness=None):
         m = m.override(roughness=roughness)
     return m
 
-def colored_coat_matte(color=None, roughness=None):
-    m = PbrProperties.from_dict({   'id': 'colored_coat_matte',
-    'name': 'colored_coat_matte',
+def coat_matte(color=None, roughness=None):
+    m = PbrProperties.from_dict({   'id': 'coat_matte',
+    'name': 'coat_matte',
     'source': 'custom',
     'url': '',
     'license': '',
@@ -47,9 +47,9 @@ def colored_coat_matte(color=None, roughness=None):
         m = m.override(roughness=roughness)
     return m
 
-def colored_coat_gloss(color=None, roughness=None):
-    m = PbrProperties.from_dict({   'id': 'colored_coat_gloss',
-    'name': 'colored_coat_gloss',
+def coat_gloss(color=None, roughness=None):
+    m = PbrProperties.from_dict({   'id': 'coat_gloss',
+    'name': 'coat_gloss',
     'source': 'custom',
     'url': '',
     'license': '',
@@ -90,7 +90,7 @@ def metallic_coat_gloss(color=None, roughness=None):
     return m
 
 __all__ = ['chrome',
- 'colored_coat_gloss',
- 'colored_coat_matte',
+ 'coat_gloss',
+ 'coat_matte',
  'metallic_coat_gloss',
  'metallic_coat_matte']
