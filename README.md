@@ -62,13 +62,13 @@ A curated set of ready-to-use PBR materials ships with the library. They need **
 
 | Module    | Materials                                                                                                  |
 | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `wood`    | ash, beech, birch, maple, mdf, oak, osb, spruce, walnut                                                    |
+| `wood`    | ash, beech, birch, maple, mdf, oak, osb, pine, spruce, walnut                                              |
 | `metal`   | aluminum, brass, bronze, copper, gold, silver, nickel, stainless, steel, titanium, zinc (each + `_brushed` / `_matte`), aluminum_anodized |
 | `coats`   | chrome, coat_matte/gloss (painted, metalness 0), metallic_coat_matte/gloss (plated, metalness 1)           |
 | `plastic` | acrylic, plastic_clean, plastic_rough, carbon_fiber                                                        |
 | `glass`   | glass                                                                                                      |
 | `paper`   | corrugated_cardboard, foamboard, paper                                                                     |
-| `textile` | fabric_weave, fabric_knit, felt, leather                                                                   |
+| `textile` | fabric_weave, felt, leather                                                                                |
 
 ```python
 from threejs_materials import wood, metal, glass

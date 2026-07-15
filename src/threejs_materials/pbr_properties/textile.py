@@ -41,33 +41,6 @@ def fabric_weave(color=None, roughness=None, scale=(1, 1), rotation=0.0):
         m = m.scale(scale[0], scale[1], rotation=rotation)
     return m
 
-def fabric_knit(color=None, roughness=None, scale=(1, 1), rotation=0.0):
-    m = PbrProperties.from_dict({
-        **{   'id': 'fabric_knit',
-    'name': 'fabric_knit',
-    'source': 'ambientcg',
-    'url': 'https://ambientcg.com/view?id=Fabric 019',
-    'license': 'CC0 1.0',
-    'values': {   'color': [   0.9999999999999999,
-                               0.9999999999999999,
-                               0.9999999999999999],
-                  'metalness': 0.0,
-                  'roughness': 1.0,
-                  'ior': 1.5,
-                  'alphaTest': 0.5},
-    'textures': {   'color': 'color.png',
-                    'normal': 'normal.png',
-                    'roughness': 'roughness.png'}},
-        "maps_dir": str(_ASSETS / 'fabric_knit'),
-    })
-    if color is not None:
-        m = m.override(color=color)
-    if roughness is not None:
-        m = m.override(roughness=roughness)
-    if scale != (1, 1) or rotation:
-        m = m.scale(scale[0], scale[1], rotation=rotation)
-    return m
-
 def felt(color=None, roughness=None, scale=(1, 1), rotation=0.0):
     m = PbrProperties.from_dict({
         **{   'id': 'felt',
@@ -120,4 +93,4 @@ def leather(color=None, roughness=None, scale=(1, 1), rotation=0.0):
         m = m.scale(scale[0], scale[1], rotation=rotation)
     return m
 
-__all__ = ['fabric_knit', 'fabric_weave', 'felt', 'leather']
+__all__ = ['fabric_weave', 'felt', 'leather']

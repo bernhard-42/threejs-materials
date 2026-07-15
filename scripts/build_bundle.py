@@ -93,7 +93,6 @@ TEXTURED: dict[str, tuple[str, str]] = {
     "paper": ("ambientcg", "Paper 001"),
     "foamboard": ("ambientcg", "Styrofoam 004"),
     "fabric_weave": ("ambientcg", "Fabric 060"),
-    "fabric_knit": ("ambientcg", "Fabric 019"),
     "felt": ("ambientcg", "Fabric 034"),
     "carbon_fiber": ("ambientcg", "Fabric 004"),
 }
@@ -109,7 +108,6 @@ TEX_CAT = {
     "paper": "paper",
     "foamboard": "paper",
     "fabric_weave": "textile",
-    "fabric_knit": "textile",
     "felt": "textile",
     "carbon_fiber": "plastic",   # composite → plastic category (weave texture)
 }
