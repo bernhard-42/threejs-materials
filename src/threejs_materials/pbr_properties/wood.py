@@ -78,6 +78,27 @@ def birch(color=None, roughness=None, scale=(1, 1), rotation=0.0):
         m = m.scale(scale[0], scale[1], rotation=rotation)
     return m
 
+def cherry(color=None, roughness=None, scale=(1, 1), rotation=0.0):
+    m = PbrProperties.from_dict({
+        **{   'id': 'cherry',
+    'name': 'cherry',
+    'source': 'custom',
+    'url': '',
+    'license': '',
+    'values': {'color': [1.0, 1.0, 1.0], 'metalness': 0.0, 'roughness': 1.0},
+    'textures': {   'color': 'color.png',
+                    'normal': 'normal.png',
+                    'roughness': 'roughness.png'}},
+        "maps_dir": str(_ASSETS / 'cherry'),
+    })
+    if color is not None:
+        m = m.override(color=color)
+    if roughness is not None:
+        m = m.override(roughness=roughness)
+    if scale != (1, 1) or rotation:
+        m = m.scale(scale[0], scale[1], rotation=rotation)
+    return m
+
 def maple(color=None, roughness=None, scale=(1, 1), rotation=0.0):
     m = PbrProperties.from_dict({
         **{   'id': 'maple',
@@ -228,6 +249,7 @@ def walnut(color=None, roughness=None, scale=(1, 1), rotation=0.0):
 __all__ = ['ash',
  'beech',
  'birch',
+ 'cherry',
  'maple',
  'mdf',
  'oak',
