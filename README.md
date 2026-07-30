@@ -62,10 +62,10 @@ A curated set of ready-to-use PBR materials ships with the library. They need **
 
 | Module    | Materials                                                                                                  |
 | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `wood`    | ash, beech, birch, maple, mdf, oak, osb, pine, spruce, walnut                                              |
+| `wood`    | ash, beech, birch, cherry, maple, mdf, oak, osb, pine, spruce, walnut                                      |
 | `metal`   | aluminum, brass, bronze, copper, gold, silver, nickel, stainless, steel, titanium, zinc (each + `_brushed` / `_matte`), aluminum_anodized |
 | `coats`   | chrome, coat_matte/gloss (painted, metalness 0), metallic_coat_matte/gloss (plated, metalness 1)           |
-| `plastic` | acrylic, plastic_clean, plastic_rough, carbon_fiber                                                        |
+| `plastic` | acrylic, plastic (+ `_rough` / `_fdm` / `_fdm_skin` finishes), carbon_fiber                                |
 | `glass`   | glass                                                                                                      |
 | `paper`   | corrugated_cardboard, foamboard, paper                                                                     |
 | `textile` | fabric_weave, felt, leather                                                                                |
@@ -92,7 +92,51 @@ metal.aluminum_anodized(color="#0044cc")   # dyed aluminium
 glass.glass(color="#88ccff", thickness=5)  # tinted glass, volumetric refraction
 textile.fabric_weave(color="red", scale=(3, 3))
 wood.oak(color="#3a1f10", rotation=90)     # stained + rotated grain
+plastic.plastic_fdm(color="#e04020")       # 3D-printed layer lines, tinted PLA/ABS
 ```
+
+Like the metals, plastic is one scalar base plus shared finish map sets: `plastic()` is
+the untextured base, `plastic_rough()` and `plastic_fdm()` graft a surface onto it. The
+base was previously called `plastic_clean`; that name still resolves as a deprecated
+alias and goes away at the next major.
+
+#### `plastic_fdm` — printed layer lines
+
+The FDM texture is authored at a real-world scale: one tile is 6.4 mm, holding 32
+extruded layers at 0.2 mm. It therefore ships with a **millimetre-true UV transform
+baked in** (`scale=(6.4, 6.4)` over raw parametric UVs), so the layer pitch is the
+printed one on a part of any size — unlike every other bundled material, whose scale is
+relative to the object. Pass `scale=(3.2, 3.2)` for a 0.1 mm layer height, and so on.
+
+Two caveats, both from layer lines being a *build-axis* phenomenon rather than a surface
+property:
+
+- **Triplanar mapping ignores the baked transform** and normalizes by the bounding box.
+  There, pass `scale=(6.4 / d, 6.4 / d)` with `d` the part's largest dimension in mm.
+- Only triplanar guarantees the lines stack along the build axis. With parametric CAD
+  UVs the stacking direction follows each face's own parameterization, so orientation
+  and phase vary from face to face.
+
+`plastic_fdm_skin()` is the companion for flat top and bottom faces: solid infill at
+45°, 0.4 mm line pitch (16 lines per tile), squashed flat against the substrate so the
+relief is 12.5 µm instead of the wall's 53.7 µm, and correspondingly glossier. The 45°
+is a baked UV rotation rather than baked pixels, which keeps the tiling and the line
+pitch exact — pass `rotation=-45` for the bottom face, the way slicers alternate.
+
+A real print has both surfaces, so assign them per face:
+
+```python
+faces = part.faces().sort_by(Axis.Z)
+top, bottom = faces[-1], faces[0]
+walls = faces - [top, bottom]
+show(top, bottom, walls,
+     materials=[plastic.plastic_fdm_skin(color="#e04020"),
+                plastic.plastic_fdm_skin(color="#e04020", rotation=-45),
+                plastic.plastic_fdm(color="#e04020", rotation=90)])
+```
+
+The skin is the easy case for mapping: a flat top face has no build-axis constraint, so
+both UV modes place it correctly.
 
 Each module's `__all__` lists its materials. Materials hold texture-file references, so importing a module is cheap — no texture bytes are read until you export a specific material. To convert your **own** materials from a source instead of using the bundle, install the [`[materialx]` extra](#materialx-support-optional).
 

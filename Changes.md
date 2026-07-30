@@ -1,3 +1,93 @@
+# v1.2.3
+
+## Breaking changes
+
+- **`plastic.plastic_clean()` renamed to `plastic.plastic()`** — plastic now follows the same base/finish shape as metal (`gold` / `gold_brushed` / `gold_matte`), so the untextured base carries the bare category name and the textured variants suffix it. The old name still resolves as a deprecated alias that emits a `DeprecationWarning` and forwards to `plastic()`; it is kept out of `__all__` and will be removed at the next major.
+
+## Features
+
+- **`plastic.plastic_fdm()` — 3D-printed FDM layer lines.** A procedurally generated layer-line surface for printed parts, colorable to any filament (`plastic_fdm(color="#e04020")`). The texture set is produced by the new `scripts/fdm_layers.py`: each extruded layer is modelled as a horizontal tube of radius `k·p/2` stacked with vertical period `p`, so the exposed profile is the arc between two overlapping beads and the normal map is derived from a real millimetre height field rather than filtered out of an image. Ships color + normal + roughness at 1K (0.85 MB), with per-layer over/under-extrusion banding, centreline wobble, drag marks along the bead, and isotropic micro-texture. All noise lattices wrap and the layer count divides the tile, so the set tiles seamlessly in both axes. Retraction zits are modelled (`BLOBS`) but off by default: modern pressure advance has largely removed them, and being the only feature big enough to recognize they made the 6.4 mm tile repeat visible.
+
+  Authored at a real-world scale — one tile is 6.4 mm holding 32 layers at 0.2 mm — so unlike every other bundled material it bakes a **millimetre-true UV transform** (`texture_repeat = 1/6.4` with `normalize_uvs=False`) instead of an object-relative one. The printed pitch therefore holds on a part of any size; `scale=(3.2, 3.2)` gives a 0.1 mm layer height. Two caveats, both from layer lines being a build-axis phenomenon rather than a surface property: triplanar mapping ignores the baked transform and normalizes by the bounding box (pass `scale=(6.4/d, 6.4/d)`), and only triplanar guarantees the lines stack along the build axis — with parametric CAD UVs the direction and phase follow each face's own parameterization.
+
+- **`plastic.plastic_fdm_skin()` — the top/bottom solid-infill surface.** The companion to `plastic_fdm` for flat top and bottom faces: 0.4 mm line pitch (the extrusion width, giving exactly 16 lines per 6.4 mm tile), the bead squashed flat against the substrate (`k=8` → 12.5 µm relief against the wall's 53.7 µm), and glossier to match — roughness 0.35–0.63 where the wall is 0.47–0.82. Its tint map is held at the same mean as the wall's (0.878 vs 0.877) so both read as the same colour under one tint when used together on a part. Same generator, different parameters — `generate()` gained `k`, `grain_mm`, `rough` and `tint` keyword arguments. 0.74 MB.
+
+  The 45° is a **baked UV rotation, not baked pixels**: rotating a square tile's contents by 45° would break the tiling, whereas rotating in texture space preserves both the wrap and the 0.4 mm pitch. `rotation=-45` gives the bottom face, the way slicers alternate. Unlike the wall texture, the skin has no build-axis constraint, so both UV modes place it correctly on a flat face.
+
+- **Plastic restructured to the metal base/finish pattern** — `plastic()` is the scalar base; `plastic_rough()` and `plastic_fdm()` graft shared finish map sets onto it, the same way `gold_brushed` / `gold_matte` share `_brush` / `_matte`. `plastic_rough`'s textures moved unchanged from `_assets/plastic_rough/` to the shared `_assets/_rough/`. Adding filament bases (PLA, ABS, …) later costs no new texture bytes.
+
+## Internals
+
+- **`scripts/build_bundle.py` can bake a non-identity UV transform into a payload** — `_payload(baked=...)` writes `texture_repeat` / `normalize_uvs` into the `from_dict` dict rather than calling `.scale()` at construction, so a default factory call keeps `id == name` instead of picking up a hashed variant id. The emitted signature's `scale` default and its `fixed=` argument follow from the same value.
+- **`_payload(prov=...)`** overrides source/url/license per material, for entries whose maps do not come from the material's own source.
+- **`DEPRECATED_ALIASES`** in the generator emits `functools.wraps`-preserving deprecation shims after `__all__`, so renamed factories keep working with an introspectable signature.
+
+## Tests
+
+- `tests/test_fdm_generator.py` (5 tests) covers the procedural generator: seamless wrap in both axes (compared against interior steps at the same bead phase, since the V wrap lands mid-flank where steps are steepest anyway), integer layer period, rejection of a layer height that doesn't divide the tile, and a neutral-grayscale color map.
+- 5 new `test_bundled.py` tests for the plastic base/finish split, the baked millimetre-true transform, scale overrides not silently re-enabling UV normalization, FDM provenance and tinting, and the deprecated alias. Full suite: **390 passing**.
+
+## Docs
+
+- README: plastic section documents the base/finish split, the deprecated alias, and a `plastic_fdm` subsection covering the millimetre scale rule and the two mapping caveats.
+- README wood table was missing `cherry`.
+
+# v1.2.2
+
+## Materials
+
+- **`wood.cherry()`** — ingested from a local glTF (ambientCG Wood093), then replaced with "Fine Cherry Wood Veneer": 1024×936 at the source's native aspect rather than a 2048×1024 embed stretched to square, with finer straight grain and no knots. Rotated 90° to run horizontally like oak/maple/walnut, using a plain transpose on all three maps with no normal channel-swap (the channel-swap darkens the render).
+
+# v1.2.1
+
+## Breaking changes
+
+- **`coats.colored_coat_matte/gloss` renamed to `coats.coat_matte/gloss`** — "coat" already implies painted/dielectric as the counterpart to `metallic_coat_*`, so the "colored" prefix was redundant.
+- **`textile.fabric_knit` removed** (ambientCG Fabric 019).
+
+## Materials
+
+- **`metal.steel`, `metal.titanium`, `metal.zinc`, `metal.tin`, `metal.nickel`** — each with the usual `_brushed` / `_matte` finishes. `tin` has no source-DB entry and is hand-authored (sRGB color, linear specularColor).
+- **`coats.metallic_coat_matte/gloss`** — plated/converted metallic scalars (metalness 1), the mirror of the dielectric `coat_*` pair: black oxide, PVD colours, nickel/tin/zinc plating.
+- **`plastic.carbon_fiber`** (ambientCG Fabric 004) and **`wood.pine`**; `wood.spruce` re-textured.
+
+## Fixes
+
+- **PhysicallyBased colours were double-linearized** — the database publishes "sRGB (Linear)" F0 values, which were stored verbatim as `values.color`; but the pipeline treats `values.color` as sRGB and re-linearizes it at the glTF boundary and in the viewer. Every bare metal, plus glass and acrylic, therefore rendered too dark. `physicallybased.py` now converts the base colour to sRGB before storing (`specularColor` / `attenuationColor` stay linear per the field convention). Verified by round-tripping zinc's `baseColorFactor` back to its F0 `[0.808, 0.844, 0.865]`.
+- **Bundle generator ordering** — `_copy_maps` could read a source's cache directory before `bake()` had populated it, producing a material with empty maps for a brand-new uncached source.
+
+## Docs
+
+- README documents that `override()` composes an arbitrary colour/metalness/roughness over a bundled material's existing relief (`gold_brushed().override(...)`), so texture ⊗ response composition needs no dedicated feature.
+- `pyproject.toml` gains project URLs.
+
+# v1.2.0
+
+## Breaking changes
+
+- **`openexr` is no longer a dependency, and `materialx` moved to an optional extra** (`pip install "threejs-materials[materialx]"`). `import threejs_materials`, the bundled materials, and glTF import/export all work without either. MaterialX is imported lazily inside the conversion functions, which raise a clear `ImportError` pointing at the extra. Install `openexr` yourself if you want Polyhaven's full-precision EXR route.
+
+## Features
+
+- **Bundled PBR material library** — ready-to-use, pre-converted materials grouped into category modules (`wood`, `metal`, `coats`, `plastic`, `glass`, `paper`, `textile`) under the `pbr_properties/` subpackage, lazily re-exported from the package root so `from threejs_materials import metal; metal.gold_brushed()` works without `pbr_properties` in the path and without loading anything on a bare import. Each material is a factory returning a fresh `PbrProperties`, and its signature exposes only the overrides that make sense: `color` (colorable materials; raw metals omit it — their colour is intrinsic), `roughness`, `scale` + `rotation` (textured), `thickness` (transmissive). Textures are held as file references, so importing a module reads no bytes; they ship in the wheel. Needs no MaterialX and no network. The authoring generator (`scripts/build_bundle.py`) is included and re-runnable.
+- **Polyhaven glTF fallback** — `SourceResult.gltf_path` plus a glTF branch in the loader let Polyhaven materials be ingested from their glTF download instead of baking `.mtlx`, which is what makes dropping `openexr` possible: Polyhaven is the only source that ships EXR, and glTF 2.0 permits only JPEG/PNG. Trade-off: 8-bit lossy maps instead of float EXR, and no displacement channel.
+- **`load_gltf()` / `from_gltf()` accept a `GLTF2` object and an optional `index`** — with `index` omitted they return `dict[str, PbrProperties]`; with it, a single material. Overloads are typed so the return type narrows correctly.
+- **`download_gpuopen()` / `download_ambientcg()` / `download_polyhaven()`** — fetch and unzip a source's raw MaterialX package (`.mtlx` + textures, hierarchy preserved) into `<dest>/<normalized_name>/`, for inspecting or hand-editing a source before conversion.
+- **`with_maps()` and `strip_maps()`** — graft another material's named texture maps onto a scalar base (`only=("normal", "roughness")`), or drop all maps while keeping scalars. These are what the bundle's shiny/brushed/matte triples are built from.
+- **Shared `normalize_name()`** for folder-safe source names, adopted across ambientCG / GPUOpen / Polyhaven.
+- **Type stubs for MaterialX / OpenEXR / Imath** — minimal `.pyi` files so the `ty` type checker resolves the untyped C-extension imports, mirroring the existing mypy `ignore_missing_imports`.
+
+## Fixes
+
+- **`from_gltf()` no longer drops textures stored in bufferViews**, and imported materials default to `normalize_uvs=True`.
+- **glTF texture-transform application deduplicated** — the four texture-info builders shared inline code that assigned into `extensions` without guarding `None`, which would crash. Extracted into `_apply_tex_transform()` with the guard, plus `bufferView` / `emissiveFactor` None-guards.
+- **`interpolate_color()` accepts a data-URI string for `texture=`** — the branch previously required `bytes` unless the string started with `data:`, so a bare data URI fell through to a `TypeError`.
+- Removed an incorrect MaterialX guard and a `has_textures` filter that excluded valid scalar-only materials.
+
+## Tests
+
+- `tests/test_polyhaven_gltf_fallback.py` and `tests/test_sources_download.py`; existing suites updated for the sources changes, the `to_dict` colour-space convention, and typing cleanups.
+
 # v1.1.1
 
 ## Features

@@ -213,11 +213,15 @@ m = plastic.acrylic(thickness=10)
 sb.color = m.interpolate_color()
 show(sb, materials=[m])
 # %%
-m = plastic.plastic_clean(color="grey")
+m = plastic.plastic(color="grey")
 sb.color = m.interpolate_color()
 show(sb, materials=[m])
 # %%
 m = plastic.plastic_rough(color="grey")
+sb.color = m.interpolate_color()
+show(sb, materials=[m])
+# %%
+m = plastic.plastic_fdm(color="grey")
 sb.color = m.interpolate_color()
 show(sb, materials=[m])
 
