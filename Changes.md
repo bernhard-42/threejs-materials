@@ -1,3 +1,9 @@
+# Unreleased
+
+## Fixes
+
+- **`interpolate_color()` no longer rescales a tinted texture to the texture's luminance.** The CAD-mode preview color is now tint × color-texture average in linear space, the same `color × map` multiply the viewer does, and the untextured path still returns the tint as is. The rescale (added in 1.1.1) collapsed every neutral tint above roughly 0.4 to the texture's own brightness, so `plastics.petg(color=(0.6, 0.6, 0.6))` previewed as 0.6 grey without a process and as 0.88 grey with `Process.FDM`, while Studio rendered both as the same grey. Textured and untextured previews now agree for a neutral texture; a textured preview is darker than the tint by the texture's average, as in Studio.
+
 # v1.2.3
 
 ## Breaking changes

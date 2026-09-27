@@ -865,7 +865,8 @@ class PbrProperties:
         When ``override_color`` is given, it replaces ``values.color`` for the
         preview — equivalent to what ``mat.override(color=override_color)``
         would render, without materializing a new PbrProperties. Multiplied
-        in linear space against the color texture average if one exists.
+        in linear space against the color texture average if one exists;
+        without a texture the tint is returned unchanged.
         """
         color_val = self.values.color
         color_tex = self.maps.color
@@ -888,15 +889,13 @@ class PbrProperties:
         if color_tex is not None:
             lr, lg, lb = _tex_avg_linear()
             if tint_srgb is not None:
+                # Tint × texture average in linear space, exactly what the
+                # viewer's `color × map` multiply does. No luminance rescale:
+                # lighting and tone mapping act on textured and untextured
+                # materials alike, so the untextured branch (tint returned as
+                # is) and this one must agree for a neutral texture.
                 tint_lin = [_srgb_to_linear(c) for c in tint_srgb]
                 mr, mg, mb = lr * tint_lin[0], lg * tint_lin[1], lb * tint_lin[2]
-                # Rescale to texture luminance — approximates the lighting +
-                # tone mapping contribution; without it the swatch reads dim.
-                y_tex = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb
-                y_mul = 0.2126 * mr + 0.7152 * mg + 0.0722 * mb
-                if y_mul > 1e-6:
-                    s = min(y_tex / y_mul, 8.0)
-                    mr, mg, mb = mr * s, mg * s, mb * s
                 sr = _linear_to_srgb(min(mr, 1.0))
                 sg = _linear_to_srgb(min(mg, 1.0))
                 sb = _linear_to_srgb(min(mb, 1.0))

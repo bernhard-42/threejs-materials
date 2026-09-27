@@ -1245,9 +1245,9 @@ class TestInterpolateColor:
         r, g, b, _ = mat.interpolate_color(override_color="#0000ff")
         assert (r, g, b) == pytest.approx((0.0, 0.0, 1.0), abs=1e-3)
 
-    def test_override_color_with_texture_preserves_luminance(self):
-        """texture × override hue, rescaled to texture luminance — preview
-        matches rendered brightness instead of the dim physical multiply."""
+    def test_override_color_with_texture_multiplies(self):
+        """texture × override in linear space, the viewer's `color × map`.
+        No luminance rescale: a grey tint must darken a grey texture."""
         from PIL import Image as PILImage
         import io
         import base64
@@ -1263,15 +1263,13 @@ class TestInterpolateColor:
             "values": {},
             "textures": {"color": tex},
         })
-        # Gray override × gray texture: luminance preservation pulls the
-        # result back up to the texture's brightness (sRGB 0.502).
+        # sRGB 0.5 → linear 0.214; × texture linear 0.216 = 0.0462 → sRGB 0.237
         r, g, b, _ = mat.interpolate_color(override_color=(0.5, 0.5, 0.5))
-        assert (r, g, b) == pytest.approx((0.502, 0.502, 0.502), abs=1e-2)
+        assert (r, g, b) == pytest.approx((0.237, 0.237, 0.237), abs=1e-2)
 
-    def test_override_color_dark_tint_brightens_to_texture_luminance(self):
-        """Regression: a dark teal tint on a moderate-luminance texture
-        was producing near-black preview (~sRGB 0.25) instead of a readable
-        green. Luminance preservation lifts it to ~half intensity per channel."""
+    def test_override_color_tint_keeps_hue(self):
+        """A teal tint on a grey texture stays teal: red channel zero, green
+        and blue equal, at tint × texture brightness (no rescale)."""
         from PIL import Image as PILImage
         import io
         import base64
@@ -1288,14 +1286,13 @@ class TestInterpolateColor:
             "textures": {"color": tex},
         })
         # (0, 0.5, 0.5) override: blue+green channels active, red zero.
-        # Without rescale: sRGB ~(0, 0.235, 0.235). With rescale: ~(0, 0.55, 0.55).
         r, g, b, _ = mat.interpolate_color(override_color=(0, 0.5, 0.5))
         assert r == pytest.approx(0.0, abs=1e-3)
-        assert g > 0.4 and b > 0.4  # readable green/blue, not near-black
+        assert g == pytest.approx(0.237, abs=1e-2)
         assert g == pytest.approx(b, abs=1e-3)  # symmetric around the swap
 
     def test_override_color_pure_black_stays_black(self):
-        """Pure-black override: y_mul ≈ 0, no rescale, result stays black."""
+        """Pure-black override × any texture stays black."""
         from PIL import Image as PILImage
         import io
         import base64
@@ -1343,6 +1340,50 @@ class TestInterpolateColor:
         # And it must actually be reddish, not the texture's neutral gray
         r, g, b, _ = from_override
         assert r > 0.4 and g < 0.05 and b < 0.05
+
+    def test_textured_and_untextured_agree_for_white_texture(self):
+        """Regression: a tint on a textured material used to be rescaled to
+        the texture's luminance, so `color=(0.6, 0.6, 0.6)` previewed as 0.6
+        without a texture but as the texture's brightness with one. With a
+        neutral (white) texture both paths must return the tint."""
+        from PIL import Image as PILImage
+        import io
+        import base64
+
+        img = PILImage.new("RGB", (4, 4), (255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        tex = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+        plain = PbrProperties.from_dict({
+            **_sample_data(), "values": {"color": [0.6, 0.6, 0.6]}, "textures": {},
+        })
+        textured = PbrProperties.from_dict({
+            **_sample_data(),
+            "values": {"color": [0.6, 0.6, 0.6]},
+            "textures": {"color": tex},
+        })
+        assert textured.interpolate_color() == pytest.approx(
+            plain.interpolate_color(), abs=1e-3
+        )
+
+    def test_textured_tint_scales_with_tint(self):
+        """A brighter tint must give a brighter preview on the same texture;
+        the old rescale collapsed every tint above ~0.4 to one value."""
+        from PIL import Image as PILImage
+        import io
+        import base64
+
+        img = PILImage.new("RGB", (4, 4), (0xE0, 0xE0, 0xE0))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        tex = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+        mat = PbrProperties.from_dict({
+            **_sample_data(), "values": {}, "textures": {"color": tex},
+        })
+        greys = [mat.interpolate_color(override_color=(c, c, c))[0] for c in (0.4, 0.6, 0.8, 1.0)]
+        assert greys == sorted(greys)
+        assert len(set(round(g, 3) for g in greys)) == 4
 
 
 class TestClearCache:
