@@ -39,6 +39,7 @@ release:
 	git tag -a v$(CURRENT_VERSION) -m "Latest release: $(CURRENT_VERSION)"
 
 create-release:
+	git push origin main v$(CURRENT_VERSION)
 	@gh release create v$(CURRENT_VERSION) \
 		dist/threejs_materials-$(CURRENT_VERSION).tar.gz \
 		dist/threejs_materials-$(CURRENT_VERSION)-py3-none-any.whl \
