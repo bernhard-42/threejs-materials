@@ -1,3 +1,17 @@
+# v1.2.5
+
+## Fixes
+
+- **`numpy` is now a declared dependency (`numpy > 2, < 3`).** `import threejs_materials` imports numpy at module level (via `convert` and `gltf`), but it was never listed, so an install with only the declared dependencies failed with `ModuleNotFoundError: No module named 'numpy'`.
+
+## Dependencies
+
+- **Pillow upper bound raised from `< 12.3.0` to `< 14.0.0`.** Allows Pillow 12.3 (security fixes, Python 3.15 preview wheels) and Pillow 13 (official Python 3.15 support). None of the APIs threejs-materials uses change or are removed in either release. On Python 3.10, Pillow 13 does not install (it requires 3.11+), so 3.10 stays on 12.x.
+
+## Tests
+
+- **16-bit PNG test helper no longer passes `mode="I;16"` to `Image.fromarray()`.** Using `mode` to change data types is removed in Pillow 13; the mode is now inferred from the `uint16` array and asserted to be `I;16`.
+
 # v1.2.4
 
 ## Fixes
