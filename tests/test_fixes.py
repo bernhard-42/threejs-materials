@@ -110,7 +110,8 @@ class TestOneBitTextures:
 def _make_16bit_png(tmp_path, name="u16.png", value=40000):
     """Create a 16-bit single-channel PNG (mode 'I;16') and return its path."""
     arr = np.full((4, 4), value, dtype=np.uint16)
-    img = Image.fromarray(arr, mode="I;16")
+    img = Image.fromarray(arr)
+    assert img.mode == "I;16"
     path = tmp_path / name
     img.save(path)
     return path
